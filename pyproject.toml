@@ -1,0 +1,14 @@
+[project]
+name = "opticarvis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bs4>=0.0.2",
+    "opencv-python>=4.13.0.92",
+    "pandas>=3.0.3",
+    "plotly>=6.7.0",
+    "requests>=2.34.2",
+    "tqdm>=4.67.3",
+]
