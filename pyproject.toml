@@ -9,6 +9,7 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "pandas>=3.0.3",
     "plotly>=6.7.0",
+    "pycountry>=26.2.16",
     "requests>=2.34.2",
     "tqdm>=4.67.3",
 ]
