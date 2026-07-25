@@ -9,6 +9,7 @@ Attributes:
 """
 # by Pavlo Bazilinskyy <pavlo.bazilinskyy@gmail.com>
 from typing import Dict
+import functools
 import os
 import json
 import pickle
@@ -27,6 +28,13 @@ output_dir = os.path.join(root_dir, '_output')
 logger = CustomLogger(__name__)  # use custom logger
 
 
+@functools.lru_cache(maxsize=None)
+def _load_secrets_file(secret_file_name: str) -> Dict[str, str]:
+    """Read and parse the secrets file once; later lookups reuse the parsed dict."""
+    with open(os.path.join(root_dir, secret_file_name), encoding='utf-8') as f:
+        return json.load(f)
+
+
 def get_secrets(entry_name: str, secret_file_name: str = 'secret') -> Dict[str, str]:
     """
     Open the secrets file and return the requested entry.
@@ -38,8 +46,20 @@ def get_secrets(entry_name: str, secret_file_name: str = 'secret') -> Dict[str, 
     Returns:
         Dict[str, str]: Description
     """
-    with open(os.path.join(root_dir, secret_file_name)) as f:
-        return json.load(f)[entry_name]
+    return _load_secrets_file(secret_file_name)[entry_name]
+
+
+@functools.lru_cache(maxsize=None)
+def _load_config_file(config_file_name: str, config_default_file_name: str):
+    """Validate and parse the config once; later get_configs calls reuse the parsed dict."""
+    if not check_config(config_file_name, config_default_file_name):
+        sys.exit(1)
+    try:
+        with open(os.path.join(root_dir, config_file_name), encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        with open(os.path.join(root_dir, config_default_file_name), encoding='utf-8') as f:
+            return json.load(f)
 
 
 def get_configs(entry_name: str, config_file_name: str = 'config', config_default_file_name: str = 'default.config'):
@@ -55,16 +75,7 @@ def get_configs(entry_name: str, config_file_name: str = 'config', config_defaul
     Returns:
         TYPE: Description
     """
-    # check if config file is updated
-    if not check_config():
-        sys.exit()
-    try:
-        with open(os.path.join(root_dir, config_file_name)) as f:
-            content = json.load(f)
-    except FileNotFoundError:
-        with open(os.path.join(root_dir, config_default_file_name)) as f:
-            content = json.load(f)
-    return content[entry_name]
+    return _load_config_file(config_file_name, config_default_file_name)[entry_name]
 
 
 def check_config(config_file_name: str = 'config',
@@ -81,23 +92,23 @@ def check_config(config_file_name: str = 'config',
     """
     # load config file
     try:
-        with open(os.path.join(root_dir, config_file_name)) as f:
+        with open(os.path.join(root_dir, config_file_name), encoding='utf-8') as f:
             config = json.load(f)
     except FileNotFoundError:
         logger.error('Config file {} not found.', config_file_name)
         return False
     except json.decoder.JSONDecodeError:
-        logger.error('Config file badly formatted. Please update based on default.config.', config_file_name)
+        logger.error('Config file {} badly formatted. Please update based on default.config.', config_file_name)
         return False
     # load default.config file
     try:
-        with open(os.path.join(root_dir, config_default_file_name)) as f:
+        with open(os.path.join(root_dir, config_default_file_name), encoding='utf-8') as f:
             default = json.load(f)
     except FileNotFoundError:
-        logger.error('Default config file {} not found.', config_file_name)
+        logger.error('Default config file {} not found.', config_default_file_name)
         return False
     except json.decoder.JSONDecodeError:
-        logger.error('Config file badly formatted. Please update based on default.config.', config_file_name)
+        logger.error('Config file {} badly formatted. Please update based on default.config.', config_default_file_name)
         return False
     # check length of each file
     if len(config) < len(default):
@@ -282,7 +293,6 @@ def get_iso3_country_code(country_name):
         return 'XKX'
     try:
         country = pycountry.countries.get(name=country_name)
-        print(country_name)
         if country:
             return country.alpha_3  # ISO-3 code
         else:

@@ -52,7 +52,9 @@ The preferred architecture is:
 
 from __future__ import annotations
 
+import datetime as dt
 import glob
+import json
 import logging
 import math
 import os
@@ -95,6 +97,11 @@ RECURSIVE_TRACKING_SEARCH = False
 # intentionally want a full dataset scan.
 MIN_TRACKING_CSV_BYTES = 5_000
 PREFER_LOCAL_SOURCE_VIDEOS = True
+
+# Reuse the ranking CSV from a previous run instead of re-scoring every tracking
+# CSV. The ranking does not depend on the policy thresholds below, so this makes
+# threshold-tuning reruns start at the per-clip policy phase immediately.
+REUSE_EXISTING_RANKING = False
 
 # Candidate windows for the first stress test clip.
 CLIP_SECONDS = 30.0
@@ -173,8 +180,7 @@ OCCLUSION_FRAME_STEP = 8
 # This can contain either low-level perception scores or offline "when" outputs
 # from Alpamayo / adaptive prediction. When available, offline explanation-needed
 # rows are preferred over the proxy trigger.
-EXTERNAL_SIGNAL_CSV = ""
-
+EXTERNAL_SIGNAL_CSV = "C:/Users/localadmin/Desktop/Shadab/alpamayo_outputs/alpamayo_offline_when_TuCsyBF3nHU.csv"
 # Offline model "when" configuration.
 # Mark's latest direction is: compute WHEN offline, then update UI parameters
 # during the study. Therefore this script prefers offline model signals whenever
@@ -186,6 +192,11 @@ OFFLINE_UNCERTAINTY_THRESHOLD = 0.55
 OFFLINE_TRAJECTORY_CONFLICT_THRESHOLD = 0.55
 OFFLINE_LOW_CONFIDENCE_THRESHOLD = 0.45
 OFFLINE_REASONING_MAX_CHARS = 160
+
+# HOW-policy display parameters (BO-tunable like the thresholds above).
+STYLE_COMPLEXITY_THRESHOLD = 0.55
+CUE_REASON_MAX_CHARS = 72
+CUE_ACTION_MAX_CHARS = 48
 
 OFFLINE_MODEL_SIGNAL_TEMPLATE_FILENAME = "offline_model_signal_template.csv"
 
@@ -489,6 +500,7 @@ def explode_mapping(mapping_csv: str) -> pd.DataFrame:
     if exploded.empty:
         raise ValueError("No segment rows could be extracted from mapping.csv")
 
+    logger.info("Loaded mapping.csv: %d original rows expanded to %d video segments", len(mapping), len(exploded))
     return exploded
 
 
@@ -653,6 +665,16 @@ def ensure_tracking_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(["frame-count", "unique-id"]).reset_index(drop=True)
 
 
+TRACKING_USECOLS = ["yolo-id", "x-center", "y-center", "width", "height", "unique-id", "confidence", "frame-count"]
+
+
+def load_filtered_tracking(csv_path: str) -> pd.DataFrame:
+    """Read, clean, and confidence-filter one tracking CSV (shared by scoring, policy, and video phases)."""
+    tracking = pd.read_csv(csv_path, usecols=TRACKING_USECOLS)
+    tracking = ensure_tracking_columns(tracking)
+    return tracking[tracking["confidence"] >= MIN_CONFIDENCE].copy()
+
+
 def looks_normalised(df: pd.DataFrame) -> bool:
     if df.empty:
         return True
@@ -670,23 +692,6 @@ def safe_norm(value: float, high: float) -> float:
     return clamp_float(value / high, 0.0, 1.0)
 
 
-def iou_one_to_many(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
-    x_left = np.maximum(box[0], boxes[:, 0])
-    y_top = np.maximum(box[1], boxes[:, 1])
-    x_right = np.minimum(box[2], boxes[:, 2])
-    y_bottom = np.minimum(box[3], boxes[:, 3])
-
-    inter_width = np.maximum(0.0, x_right - x_left)
-    inter_height = np.maximum(0.0, y_bottom - y_top)
-    inter_area = inter_width * inter_height
-
-    box_area = max(0.0, (box[2] - box[0]) * (box[3] - box[1]))
-    boxes_area = np.maximum(0.0, (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]))
-    union = box_area + boxes_area - inter_area
-
-    return np.divide(inter_area, union, out=np.zeros_like(inter_area), where=union > 0)
-
-
 def distance_score(row_a: pd.Series, rows_b: pd.DataFrame) -> float:
     if rows_b.empty:
         return 0.0
@@ -702,25 +707,35 @@ def estimate_occlusion_for_frame(person_rows: pd.DataFrame, vehicle_rows: pd.Dat
     if person_rows.empty:
         return 0.0
 
-    all_rows = pd.concat([person_rows, vehicle_rows], ignore_index=True)
-    if len(all_rows) <= 1:
+    person_boxes = person_rows[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
+    person_ids = person_rows["unique-id"].to_numpy(dtype=int)
+    if vehicle_rows.empty:
+        all_boxes = person_boxes
+        all_ids = person_ids
+    else:
+        all_boxes = np.vstack([person_boxes, vehicle_rows[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)])
+        all_ids = np.concatenate([person_ids, vehicle_rows["unique-id"].to_numpy(dtype=int)])
+
+    if len(all_boxes) <= 1:
         return 0.0
 
-    all_boxes = all_rows[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
-    all_ids = all_rows["unique-id"].to_numpy(dtype=int)
+    x_left = np.maximum(person_boxes[:, None, 0], all_boxes[None, :, 0])
+    y_top = np.maximum(person_boxes[:, None, 1], all_boxes[None, :, 1])
+    x_right = np.minimum(person_boxes[:, None, 2], all_boxes[None, :, 2])
+    y_bottom = np.minimum(person_boxes[:, None, 3], all_boxes[None, :, 3])
+    inter_area = np.maximum(0.0, x_right - x_left) * np.maximum(0.0, y_bottom - y_top)
 
-    scores: List[float] = []
-    for _, ped in person_rows.iterrows():
-        ped_box = ped[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
-        mask = all_ids != int(ped["unique-id"])
-        other_boxes = all_boxes[mask]
-        if len(other_boxes) == 0:
-            scores.append(0.0)
-        else:
-            overlaps = iou_one_to_many(ped_box, other_boxes)
-            scores.append(float(np.mean(overlaps > OCCLUSION_IOU_THRESHOLD)))
+    person_area = np.maximum(0.0, (person_boxes[:, 2] - person_boxes[:, 0]) * (person_boxes[:, 3] - person_boxes[:, 1]))
+    all_area = np.maximum(0.0, (all_boxes[:, 2] - all_boxes[:, 0]) * (all_boxes[:, 3] - all_boxes[:, 1]))
+    union = person_area[:, None] + all_area[None, :] - inter_area
+    iou = np.divide(inter_area, union, out=np.zeros_like(inter_area), where=union > 0)
 
-    return float(np.mean(scores)) if scores else 0.0
+    # A detection never occludes its own track, including duplicate rows.
+    other = person_ids[:, None] != all_ids[None, :]
+    other_counts = other.sum(axis=1)
+    overlap_hits = ((iou > OCCLUSION_IOU_THRESHOLD) & other).sum(axis=1)
+    scores = np.where(other_counts > 0, overlap_hits / np.maximum(other_counts, 1), 0.0)
+    return float(np.mean(scores))
 
 
 def deduplicate_tracking_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -770,25 +785,20 @@ def empty_role_result(person_id: int) -> Dict[str, object]:
     }
 
 
-def classify_person_role(tracking: pd.DataFrame, person_id: int) -> Dict[str, object]:
+def classify_person_role(person_track: Optional[pd.DataFrame], rider_rows: pd.DataFrame, person_id: int) -> Dict[str, object]:
+    """Classify one person track from pre-deduplicated rows (see build_person_role_lookup)."""
     result = empty_role_result(person_id)
-    if not ENABLE_ROAD_USER_ROLE_FILTER or tracking.empty:
-        return result
-
-    work = deduplicate_tracking_rows(tracking)
-    person_track = work[(work["yolo-id"].isin(PERSON_CLASS_IDS)) & (work["unique-id"] == int(person_id))].copy()
-    if len(person_track) < ROLE_MIN_SHARED_FRAMES:
+    if person_track is None or len(person_track) < ROLE_MIN_SHARED_FRAMES:
         return result
 
     person_track = person_track.sort_values("frame-count").drop_duplicates(subset=["frame-count"], keep="first")
     first_frame = int(person_track["frame-count"].min())
     last_frame = int(person_track["frame-count"].max())
 
-    vehicle_rows = work[
-        (work["frame-count"] >= first_frame)
-        & (work["frame-count"] <= last_frame)
-        & (work["yolo-id"].isin(RIDER_VEHICLE_CLASS_IDS))
-    ].copy()
+    vehicle_rows = rider_rows[
+        (rider_rows["frame-count"] >= first_frame)
+        & (rider_rows["frame-count"] <= last_frame)
+    ]
     if vehicle_rows.empty:
         return result
 
@@ -901,11 +911,22 @@ def classify_person_role(tracking: pd.DataFrame, person_id: int) -> Dict[str, ob
 
 
 def build_person_role_lookup(tracking: pd.DataFrame) -> Dict[int, Dict[str, object]]:
-    person_rows = tracking[tracking["yolo-id"].isin(PERSON_CLASS_IDS)].copy()
-    lookup: Dict[int, Dict[str, object]] = {}
-    for person_id in sorted(person_rows["unique-id"].dropna().astype(int).unique().tolist()):
-        lookup[int(person_id)] = classify_person_role(tracking, int(person_id))
-    return lookup
+    person_ids = sorted(
+        tracking[tracking["yolo-id"].isin(PERSON_CLASS_IDS)]["unique-id"].dropna().astype(int).unique().tolist()
+    )
+    if not ENABLE_ROAD_USER_ROLE_FILTER or tracking.empty or not person_ids:
+        return {person_id: empty_role_result(person_id) for person_id in person_ids}
+
+    # Deduplicate and pre-split once for the whole window instead of once per person track.
+    work = deduplicate_tracking_rows(tracking)
+    person_work = work[work["yolo-id"].isin(PERSON_CLASS_IDS)]
+    person_groups = {int(person_id): group for person_id, group in person_work.groupby("unique-id")}
+    rider_rows = work[work["yolo-id"].isin(RIDER_VEHICLE_CLASS_IDS)]
+
+    return {
+        person_id: classify_person_role(person_groups.get(person_id), rider_rows, person_id)
+        for person_id in person_ids
+    }
 
 
 def add_roles_to_person_rows(person_rows: pd.DataFrame, role_lookup: Dict[int, Dict[str, object]]) -> pd.DataFrame:
@@ -932,49 +953,51 @@ def rows_with_role(person_rows: pd.DataFrame, role_name: str) -> pd.DataFrame:
 # =============================================================================
 
 def compute_track_stats(person_rows: pd.DataFrame, fps: float) -> pd.DataFrame:
-    rows: List[Dict[str, object]] = []
-    for track_id, group in person_rows.groupby("unique-id"):
-        group = group.sort_values("frame-count")
-        duration_frames = int(group["frame-count"].max() - group["frame-count"].min() + 1)
-        duration_s = duration_frames / fps
+    if person_rows.empty:
+        return pd.DataFrame()
 
-        head = group.head(min(5, len(group)))
-        tail = group.tail(min(5, len(group)))
+    ordered = person_rows.sort_values(["unique-id", "frame-count"], kind="stable")
+    grouped = ordered.groupby("unique-id")
 
-        x_start = float(head["x-center"].mean())
-        x_end = float(tail["x-center"].mean())
-        y_start = float(head["y-center"].mean())
-        y_end = float(tail["y-center"].mean())
-        area_start = float(head["area"].mean())
-        area_end = float(tail["area"].mean())
-        area_growth = (area_end - area_start) / max(area_start, 1e-9)
+    head_means = grouped.head(5).groupby("unique-id")[["x-center", "y-center", "area"]].mean()
+    tail_means = grouped.tail(5).groupby("unique-id")[["x-center", "y-center", "area"]].mean()
+    first_frame = grouped["frame-count"].min()
+    last_frame = grouped["frame-count"].max()
 
-        bottom_centrality = 1.0 - min(abs(float(group["x-center"].median()) - 0.5) / 0.5, 1.0)
-        bottom_proximity = clamp_float(float(group["y-center"].quantile(0.75)), 0.0, 1.0)
-        ego_corridor_score = 0.55 * bottom_centrality + 0.45 * bottom_proximity
+    duration_s = (last_frame - first_frame + 1).astype(float) / fps
+    x_start = head_means["x-center"]
+    x_end = tail_means["x-center"]
+    y_start = head_means["y-center"]
+    y_end = tail_means["y-center"]
+    area_start = head_means["area"]
+    area_end = tail_means["area"]
+    area_growth = (area_end - area_start) / np.maximum(area_start, 1e-9)
 
-        rows.append(
-            {
-                "track_id": int(track_id),
-                "first_frame": int(group["frame-count"].min()),
-                "last_frame": int(group["frame-count"].max()),
-                "duration_s": float(duration_s),
-                "mean_confidence": float(group["confidence"].mean()),
-                "x_motion": abs(x_end - x_start),
-                "y_motion": abs(y_end - y_start),
-                "area_growth": float(area_growth),
-                "x_start": x_start,
-                "x_end": x_end,
-                "y_start": y_start,
-                "y_end": y_end,
-                "median_x": float(group["x-center"].median()),
-                "median_y": float(group["y-center"].median()),
-                "ego_corridor_score": float(ego_corridor_score),
-                "n_detections": int(len(group)),
-            }
-        )
+    median_x = grouped["x-center"].median()
+    bottom_centrality = 1.0 - np.minimum((median_x - 0.5).abs() / 0.5, 1.0)
+    bottom_proximity = grouped["y-center"].quantile(0.75).clip(0.0, 1.0)
+    ego_corridor_score = 0.55 * bottom_centrality + 0.45 * bottom_proximity
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        {
+            "track_id": first_frame.index.to_numpy(dtype=int),
+            "first_frame": first_frame.to_numpy(dtype=int),
+            "last_frame": last_frame.to_numpy(dtype=int),
+            "duration_s": duration_s.to_numpy(dtype=float),
+            "mean_confidence": grouped["confidence"].mean().to_numpy(dtype=float),
+            "x_motion": (x_end - x_start).abs().to_numpy(dtype=float),
+            "y_motion": (y_end - y_start).abs().to_numpy(dtype=float),
+            "area_growth": area_growth.to_numpy(dtype=float),
+            "x_start": x_start.to_numpy(dtype=float),
+            "x_end": x_end.to_numpy(dtype=float),
+            "y_start": y_start.to_numpy(dtype=float),
+            "y_end": y_end.to_numpy(dtype=float),
+            "median_x": median_x.to_numpy(dtype=float),
+            "median_y": grouped["y-center"].median().to_numpy(dtype=float),
+            "ego_corridor_score": ego_corridor_score.to_numpy(dtype=float),
+            "n_detections": grouped.size().to_numpy(dtype=int),
+        }
+    )
 
 
 def choose_main_pedestrian(person_rows: pd.DataFrame, fps: float) -> Optional[Dict[str, object]]:
@@ -1024,11 +1047,17 @@ def score_candidate_window(window: pd.DataFrame, fps: float, start_frame: int, e
     veh_density = vehicle_rows.groupby("frame-count")["unique-id"].nunique().reindex(frames, fill_value=0)
 
     occlusion_frames = frames[::max(1, OCCLUSION_FRAME_STEP)]
-    occlusion_scores: List[float] = []
-    for frame in occlusion_frames:
-        p_frame = pedestrian_rows[pedestrian_rows["frame-count"] == frame]
-        v_frame = vehicle_rows[vehicle_rows["frame-count"] == frame]
-        occlusion_scores.append(estimate_occlusion_for_frame(p_frame, v_frame))
+    ped_by_frame = {int(frame): group for frame, group in pedestrian_rows.groupby("frame-count")}
+    veh_by_frame = {int(frame): group for frame, group in vehicle_rows.groupby("frame-count")}
+    empty_ped = pedestrian_rows.iloc[0:0]
+    empty_veh = vehicle_rows.iloc[0:0]
+    occlusion_scores: List[float] = [
+        estimate_occlusion_for_frame(
+            ped_by_frame.get(int(frame), empty_ped),
+            veh_by_frame.get(int(frame), empty_veh),
+        )
+        for frame in occlusion_frames
+    ]
 
     vehicle_presence = float((veh_density > 0).mean())
     avg_density = float((ped_density + veh_density).mean())
@@ -1087,9 +1116,7 @@ def score_tracking_csv(csv_path: str, mapping_lookup: Dict[Tuple[str, int], Dict
     fps = float(parsed["fps"])
     meta = mapping_lookup.get((video_id, segment_start), {})
 
-    tracking = pd.read_csv(csv_path, usecols=["yolo-id", "x-center", "y-center", "width", "height", "unique-id", "confidence", "frame-count"])
-    tracking = ensure_tracking_columns(tracking)
-    tracking = tracking[tracking["confidence"] >= MIN_CONFIDENCE].copy()
+    tracking = load_filtered_tracking(csv_path)
     if tracking.empty:
         return []
 
@@ -1149,7 +1176,14 @@ def normalise_external_column_name(column: object) -> str:
 
 
 def load_external_signals(path: str) -> pd.DataFrame:
-    if not path or not os.path.isfile(path):
+    if not path:
+        return pd.DataFrame()
+    if not os.path.isfile(path):
+        logger.warning(
+            "EXTERNAL_SIGNAL_CSV is set but the file does not exist: %s "
+            "— all clips will fall back to YOLOv11 + BoT SORT proxy WHEN triggers",
+            path,
+        )
         return pd.DataFrame()
 
     signals = pd.read_csv(path)
@@ -1192,8 +1226,13 @@ def get_external_text(row: pd.Series, names: List[str], default_value: str = "")
 
 def get_external_number(row: pd.Series, names: List[str], default_value: float = 0.0) -> float:
     value = get_external_value(row, names, default_value)
-    number = pd.to_numeric(pd.Series([value]), errors="coerce").fillna(default_value).iloc[0]
-    return float(number)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default_value)
+    if math.isnan(number):
+        return float(default_value)
+    return number
 
 
 def get_external_bool(row: pd.Series, names: List[str], default_value: bool = False) -> bool:
@@ -1201,9 +1240,12 @@ def get_external_bool(row: pd.Series, names: List[str], default_value: bool = Fa
     if isinstance(value, bool):
         return bool(value)
 
-    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.notna(number):
-        return bool(float(number) > 0.0)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float("nan")
+    if not math.isnan(number):
+        return bool(number > 0.0)
 
     text_value = str(value).strip().lower()
     if text_value in {"true", "yes", "y", "1", "needed", "explain", "explanation-needed"}:
@@ -1213,15 +1255,28 @@ def get_external_bool(row: pd.Series, names: List[str], default_value: bool = Fa
     return bool(default_value)
 
 
-def filter_external_rows_for_frame(
+EXTERNAL_TIME_COLUMNS = [
+    "frame-count",
+    "frame-local",
+    "when-start-frame-local",
+    "when-end-frame-local",
+    "when-start-local-s",
+    "when-end-local-s",
+    "when-start-absolute-s",
+    "when-end-absolute-s",
+]
+
+
+def prepare_external_for_clip(
     external: pd.DataFrame,
     video_id: str,
     segment_start: int,
-    frame_count: int,
-    time_local_s: float,
-) -> pd.DataFrame:
-    candidates = external.copy()
+) -> Tuple[pd.DataFrame, Dict[str, pd.Series]]:
+    """Apply the per-clip filters and numeric conversions once, instead of once per frame."""
+    if external.empty:
+        return external, {}
 
+    candidates = external
     if "video-id" in candidates.columns:
         candidates = candidates[candidates["video-id"].astype(str) == str(video_id)]
 
@@ -1229,49 +1284,74 @@ def filter_external_rows_for_frame(
         start_times = pd.to_numeric(candidates["segment-start-time-s"], errors="coerce")
         candidates = candidates[start_times == int(segment_start)]
 
+    if not external.empty and candidates.empty and PREFER_OFFLINE_MODEL_WHEN:
+        logger.info(
+            "External signal CSV has no rows for video=%s segment=%s; falling back to proxy WHEN triggers for this clip",
+            video_id,
+            segment_start,
+        )
+
+    numeric = {
+        column: pd.to_numeric(candidates[column], errors="coerce")
+        for column in EXTERNAL_TIME_COLUMNS
+        if column in candidates.columns
+    }
+    return candidates, numeric
+
+
+def filter_external_rows_for_frame(
+    candidates: pd.DataFrame,
+    numeric: Dict[str, pd.Series],
+    segment_start: int,
+    frame_count: int,
+    time_local_s: float,
+) -> pd.DataFrame:
     if candidates.empty:
         return candidates
 
-    if "frame-count" in candidates.columns:
-        frame_values = pd.to_numeric(candidates["frame-count"], errors="coerce")
-        matched = candidates[frame_values == int(frame_count)]
+    if "frame-count" in numeric:
+        matched = candidates[numeric["frame-count"] == int(frame_count)]
         if not matched.empty:
             return matched
 
-    if "frame-local" in candidates.columns:
-        frame_values = pd.to_numeric(candidates["frame-local"], errors="coerce")
-        matched = candidates[frame_values == int(frame_count)]
+    if "frame-local" in numeric:
+        matched = candidates[numeric["frame-local"] == int(frame_count)]
         if not matched.empty:
             return matched
 
-    has_frame_interval = "when-start-frame-local" in candidates.columns and "when-end-frame-local" in candidates.columns
+    has_frame_interval = "when-start-frame-local" in numeric and "when-end-frame-local" in numeric
     if has_frame_interval:
-        start_values = pd.to_numeric(candidates["when-start-frame-local"], errors="coerce")
-        end_values = pd.to_numeric(candidates["when-end-frame-local"], errors="coerce")
-        matched = candidates[(start_values <= int(frame_count)) & (end_values >= int(frame_count))]
+        matched = candidates[
+            (numeric["when-start-frame-local"] <= int(frame_count))
+            & (numeric["when-end-frame-local"] >= int(frame_count))
+        ]
         if not matched.empty:
             return matched
 
-    has_time_interval = "when-start-local-s" in candidates.columns and "when-end-local-s" in candidates.columns
+    # Note: time_local_s is measured from the CANDIDATE CLIP start (frame - start_frame),
+    # so when-start/end-local-s values are interpreted relative to the selected clip.
+    has_time_interval = "when-start-local-s" in numeric and "when-end-local-s" in numeric
     if has_time_interval:
-        start_values = pd.to_numeric(candidates["when-start-local-s"], errors="coerce")
-        end_values = pd.to_numeric(candidates["when-end-local-s"], errors="coerce")
-        matched = candidates[(start_values <= float(time_local_s)) & (end_values >= float(time_local_s))]
+        matched = candidates[
+            (numeric["when-start-local-s"] <= float(time_local_s))
+            & (numeric["when-end-local-s"] >= float(time_local_s))
+        ]
         if not matched.empty:
             return matched
 
-    has_absolute_interval = "when-start-absolute-s" in candidates.columns and "when-end-absolute-s" in candidates.columns
+    has_absolute_interval = "when-start-absolute-s" in numeric and "when-end-absolute-s" in numeric
     if has_absolute_interval:
         absolute_time = float(segment_start) + float(time_local_s)
-        start_values = pd.to_numeric(candidates["when-start-absolute-s"], errors="coerce")
-        end_values = pd.to_numeric(candidates["when-end-absolute-s"], errors="coerce")
-        matched = candidates[(start_values <= absolute_time) & (end_values >= absolute_time)]
+        matched = candidates[
+            (numeric["when-start-absolute-s"] <= absolute_time)
+            & (numeric["when-end-absolute-s"] >= absolute_time)
+        ]
         if not matched.empty:
             return matched
 
     has_any_time_column = (
-        "frame-count" in candidates.columns
-        or "frame-local" in candidates.columns
+        "frame-count" in numeric
+        or "frame-local" in numeric
         or has_frame_interval
         or has_time_interval
         or has_absolute_interval
@@ -1279,20 +1359,20 @@ def filter_external_rows_for_frame(
     if not has_any_time_column and len(candidates) == 1:
         return candidates
 
-    return candidates.iloc[0:0].copy()
+    return candidates.iloc[0:0]
 
 
 def external_row_for_frame(
-    external: pd.DataFrame,
-    video_id: str,
+    external_clip: Tuple[pd.DataFrame, Dict[str, pd.Series]],
     segment_start: int,
     frame_count: int,
     time_local_s: float,
 ) -> Dict[str, object]:
-    if external.empty:
+    clip_rows, numeric = external_clip
+    if clip_rows.empty:
         return {}
 
-    candidates = filter_external_rows_for_frame(external, video_id, segment_start, frame_count, time_local_s)
+    candidates = filter_external_rows_for_frame(clip_rows, numeric, segment_start, frame_count, time_local_s)
     if candidates.empty:
         return {}
 
@@ -1355,27 +1435,37 @@ def compact_text(value: object, max_chars: int = OFFLINE_REASONING_MAX_CHARS) ->
 # FRAME LEVEL POLICY
 # =============================================================================
 
-def compute_main_track_features(main_history: pd.DataFrame, current_frame: int, fps: float) -> Dict[str, float]:
-    if main_history.empty:
+def compute_main_track_features(
+    track_frames: np.ndarray,
+    track_x: np.ndarray,
+    track_y: np.ndarray,
+    track_area: np.ndarray,
+    current_frame: int,
+    window_frames: int,
+) -> Dict[str, float]:
+    """Movement features for the main track up to current_frame.
+
+    The track arrays must be sorted by frame (ensure_tracking_columns guarantees this).
+    Head/tail rows of the recent window are found with searchsorted instead of
+    filtering and copying the history DataFrame for every frame.
+    """
+    tail_idx = int(np.searchsorted(track_frames, current_frame, side="right")) - 1
+    if tail_idx < 0:
         return {
             "lateral_motion_score": 0.0,
             "approach_score": 0.0,
             "ego_corridor_score": 0.0,
         }
 
-    window_frames = max(1, int(round(0.75 * fps)))
-    recent = main_history[main_history["frame-count"] >= current_frame - window_frames].copy()
-    if recent.empty:
-        recent = main_history.tail(1).copy()
+    head_idx = int(np.searchsorted(track_frames, current_frame - window_frames, side="left"))
+    if head_idx > tail_idx:
+        head_idx = tail_idx
 
-    head = recent.head(1).iloc[0]
-    tail = recent.tail(1).iloc[0]
+    dx = abs(float(track_x[tail_idx]) - float(track_x[head_idx]))
+    area_growth = (float(track_area[tail_idx]) - float(track_area[head_idx])) / max(float(track_area[head_idx]), 1e-9)
 
-    dx = abs(float(tail["x-center"]) - float(head["x-center"]))
-    area_growth = (float(tail["area"]) - float(head["area"])) / max(float(head["area"]), 1e-9)
-
-    x_center = float(tail["x-center"])
-    y_center = float(tail["y-center"])
+    x_center = float(track_x[tail_idx])
+    y_center = float(track_y[tail_idx])
     centrality = 1.0 - min(abs(x_center - 0.5) / 0.5, 1.0)
     bottom_proximity = clamp_float(y_center, 0.0, 1.0)
     ego_corridor_score = 0.55 * centrality + 0.45 * bottom_proximity
@@ -1387,11 +1477,15 @@ def compute_main_track_features(main_history: pd.DataFrame, current_frame: int, 
     }
 
 
-def compute_policy_for_clip(candidate: pd.Series, external_signals: pd.DataFrame) -> pd.DataFrame:
+def compute_policy_for_clip(
+    candidate: pd.Series,
+    external_signals: pd.DataFrame,
+    tracking: Optional[pd.DataFrame] = None,
+    role_lookup: Optional[Dict[int, Dict[str, object]]] = None,
+) -> pd.DataFrame:
     csv_path = str(candidate["csv_path"])
-    tracking = pd.read_csv(csv_path, usecols=["yolo-id", "x-center", "y-center", "width", "height", "unique-id", "confidence", "frame-count"])
-    tracking = ensure_tracking_columns(tracking)
-    tracking = tracking[tracking["confidence"] >= MIN_CONFIDENCE].copy()
+    if tracking is None:
+        tracking = load_filtered_tracking(csv_path)
 
     start_frame = int(candidate["start_frame_local"])
     end_frame = int(candidate["end_frame_local"])
@@ -1401,16 +1495,31 @@ def compute_policy_for_clip(candidate: pd.Series, external_signals: pd.DataFrame
     main_track_id = int(candidate["main_pedestrian_track_id"])
 
     clip_rows = tracking[(tracking["frame-count"] >= start_frame) & (tracking["frame-count"] <= end_frame)].copy()
-    role_lookup = build_person_role_lookup(clip_rows)
+    if role_lookup is None:
+        role_lookup = build_person_role_lookup(clip_rows)
     main_role = role_lookup.get(main_track_id, empty_role_result(main_track_id))
     main_road_user_role = str(main_role.get("road_user_role", "pedestrian_candidate"))
     main_is_pedestrian_candidate = bool(main_road_user_role == "pedestrian_candidate")
 
-    by_frame = {int(frame): group.copy() for frame, group in clip_rows.groupby("frame-count")}
+    # Roles are fixed per track for the whole clip: resolve them once per unique-id
+    # instead of building and merging a role DataFrame for every frame.
+    role_names = {
+        int(person_id): str(role.get("road_user_role", "pedestrian_candidate"))
+        for person_id, role in role_lookup.items()
+    }
+    by_frame = {int(frame): group for frame, group in clip_rows.groupby("frame-count")}
+    empty_frame = clip_rows.iloc[0:0]
     main_track_all = clip_rows[
         (clip_rows["yolo-id"].isin(PERSON_CLASS_IDS))
         & (clip_rows["unique-id"] == main_track_id)
-    ].copy()
+    ]
+    main_frames = main_track_all["frame-count"].to_numpy()
+    main_x = main_track_all["x-center"].to_numpy(dtype=float)
+    main_y = main_track_all["y-center"].to_numpy(dtype=float)
+    main_area = main_track_all["area"].to_numpy(dtype=float)
+    movement_window_frames = max(1, int(round(0.75 * fps)))
+
+    external_clip = prepare_external_for_clip(external_signals, video_id, segment_start)
 
     persistence_frames = max(1, int(round(PERSISTENCE_SECONDS * fps)))
     active_until_frame = -1
@@ -1418,39 +1527,42 @@ def compute_policy_for_clip(candidate: pd.Series, external_signals: pd.DataFrame
     last_active_cue = "No explanation"
     records: List[Dict[str, object]] = []
 
-    for frame in range(start_frame, end_frame + 1):
-        frame_rows = by_frame.get(frame, pd.DataFrame(columns=clip_rows.columns))
-        person_rows_all = frame_rows[frame_rows["yolo-id"].isin(PERSON_CLASS_IDS)].copy()
-        person_rows = add_roles_to_person_rows(person_rows_all, role_lookup)
-        pedestrian_rows = rows_with_role(person_rows, "pedestrian_candidate")
-        cyclist_rows = rows_with_role(person_rows, "cyclist_candidate")
-        motorcyclist_rows = rows_with_role(person_rows, "motorcyclist_candidate")
-        vehicle_rows = frame_rows[frame_rows["yolo-id"].isin(VEHICLE_CLASS_IDS)].copy()
-        main_now = pedestrian_rows[pedestrian_rows["unique-id"] == main_track_id].copy()
-        main_history = main_track_all[main_track_all["frame-count"] <= frame].copy()
+    frame_iterator = tqdm(
+        range(start_frame, end_frame + 1),
+        desc=f"Policy frames {video_id}",
+        unit="frame",
+        leave=False,
+    )
+    for frame in frame_iterator:
+        frame_rows = by_frame.get(frame, empty_frame)
+        person_rows_all = frame_rows[frame_rows["yolo-id"].isin(PERSON_CLASS_IDS)]
+        person_roles = person_rows_all["unique-id"].map(role_names).fillna("pedestrian_candidate")
+        pedestrian_rows = person_rows_all[person_roles == "pedestrian_candidate"]
+        vehicle_rows = frame_rows[frame_rows["yolo-id"].isin(VEHICLE_CLASS_IDS)]
+        main_now = pedestrian_rows[pedestrian_rows["unique-id"] == main_track_id]
 
         person_class_count = int(person_rows_all["unique-id"].nunique())
         ped_count = int(pedestrian_rows["unique-id"].nunique())
-        cyclist_count = int(cyclist_rows["unique-id"].nunique())
-        motorcyclist_count = int(motorcyclist_rows["unique-id"].nunique())
+        cyclist_count = int(person_rows_all.loc[person_roles == "cyclist_candidate", "unique-id"].nunique())
+        motorcyclist_count = int(person_rows_all.loc[person_roles == "motorcyclist_candidate", "unique-id"].nunique())
         vehicle_count = int(vehicle_rows["unique-id"].nunique())
         density = ped_count + vehicle_count
         main_visible = int((not main_now.empty) and main_is_pedestrian_candidate)
 
         if main_visible:
             main_row = main_now.iloc[0]
-            movement = compute_main_track_features(main_history, frame, fps)
+            movement = compute_main_track_features(main_frames, main_x, main_y, main_area, frame, movement_window_frames)
             proximity_score = distance_score(main_row, vehicle_rows)
         else:
             movement = {"lateral_motion_score": 0.0, "approach_score": 0.0, "ego_corridor_score": 0.0}
             proximity_score = 0.0
 
-        occlusion_score = estimate_occlusion_for_frame(person_rows, vehicle_rows)
+        occlusion_score = estimate_occlusion_for_frame(person_rows_all, vehicle_rows)
         density_score = safe_norm(float(density), float(DENSITY_TRIGGER_THRESHOLD + 2))
         vehicle_present = 1.0 if vehicle_count > 0 else 0.0
 
         time_local_s = (frame - start_frame) / fps
-        external = external_row_for_frame(external_signals, video_id, segment_start, frame, time_local_s)
+        external = external_row_for_frame(external_clip, segment_start, frame, time_local_s)
 
         offline_model_available = bool(external.get("offline_model_available", False))
         offline_ambiguity_score = float(external.get("offline_ambiguity_score", 0.0))
@@ -1562,9 +1674,9 @@ def compute_policy_for_clip(candidate: pd.Series, external_signals: pd.DataFrame
         if use_offline_when and offline_explanation_need_trigger:
             current_what_to_show = "model_reasoning_explanation_cue"
             if offline_explanation_reason:
-                current_cue_text = compact_text(offline_explanation_reason, 72)
+                current_cue_text = compact_text(offline_explanation_reason, CUE_REASON_MAX_CHARS)
             elif offline_meta_action:
-                current_cue_text = f"Explain AV action: {compact_text(offline_meta_action, 48)}"
+                current_cue_text = f"Explain AV action: {compact_text(offline_meta_action, CUE_ACTION_MAX_CHARS)}"
             else:
                 current_cue_text = "Explain model reasoning / uncertainty"
         elif risk_event_trigger:
@@ -1599,7 +1711,7 @@ def compute_policy_for_clip(candidate: pd.Series, external_signals: pd.DataFrame
         saliency = clamp_float(0.25 + 0.55 * risk_score + 0.20 * visual_complexity_score, 0.0, 1.0)
         opacity = clamp_float(0.30 + 0.55 * saliency, 0.0, 1.0)
         cue_size = clamp_float(0.40 + 0.45 * saliency, 0.0, 1.0)
-        if visual_complexity_score >= 0.55 or context_modifier_trigger:
+        if visual_complexity_score >= STYLE_COMPLEXITY_THRESHOLD or context_modifier_trigger:
             explanation_style = "short_label"
         else:
             explanation_style = "icon_plus_short_label"
@@ -1993,25 +2105,50 @@ def save_video_response(response: requests.Response, filename_with_ext: str, sou
 
     if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
         logger.info("Using already downloaded source video: %s", local_path)
+        response.close()
         return local_path
 
     total_text = response.headers.get("content-length", "0")
     total = int(total_text) if str(total_text).isdigit() and int(total_text) > 0 else None
     written = 0
 
-    with open(local_path, "wb") as file_handle, tqdm(
-        total=total,
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-        desc=f"Downloading source video {filename_with_ext}",
-    ) as bar:
-        for chunk in response.iter_content(chunk_size=1024 * 1024):
-            if chunk:
-                file_handle.write(chunk)
-                written += len(chunk)
-                if total:
-                    bar.update(len(chunk))
+    # Stream to a .part file and rename on success, so an interrupted download can
+    # never leave a truncated video that later runs silently treat as complete.
+    part_path = local_path + ".part"
+    try:
+        with open(part_path, "wb") as file_handle, tqdm(
+            total=total,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            desc=f"Downloading source video {filename_with_ext}",
+        ) as bar:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    file_handle.write(chunk)
+                    written += len(chunk)
+                    if total:
+                        bar.update(len(chunk))
+    except Exception as exc:
+        logger.warning("Download interrupted for %s: %s (removing partial file)", filename_with_ext, exc)
+        if os.path.isfile(part_path):
+            os.remove(part_path)
+        return None
+    finally:
+        response.close()
+
+    if total is not None and written != total:
+        logger.warning(
+            "Download incomplete for %s: got %d of %d bytes (discarding partial file)",
+            filename_with_ext,
+            written,
+            total,
+        )
+        if os.path.isfile(part_path):
+            os.remove(part_path)
+        return None
+
+    os.replace(part_path, local_path)
 
     if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
         resolution = get_video_resolution_label(local_path)
@@ -2031,12 +2168,17 @@ def save_video_response(response: requests.Response, filename_with_ext: str, sou
 
 
 def fetch_url(session: requests.Session, url: str, stream: bool) -> Optional[requests.Response]:
-    response = session.get(url, timeout=FTP_TIMEOUT_SECONDS, stream=stream)
+    try:
+        response = session.get(url, timeout=FTP_TIMEOUT_SECONDS, stream=stream)
+    except requests.RequestException as exc:
+        logger.warning("Request failed for %s: %s", url, exc)
+        return None
     logger.debug("GET %s -> %d", url, response.status_code)
     if response.status_code == 200:
         return response
     if response.status_code == 401:
         logger.warning("Authentication failed for %s", url)
+    response.close()
     return None
 
 
@@ -2241,15 +2383,20 @@ def draw_cue(frame: np.ndarray, policy_row: pd.Series) -> None:
     cv2.putText(frame, style, (x2 - 230, y1 + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
 
 
-def create_annotated_video(candidate: pd.Series, policy: pd.DataFrame, output_path: str) -> bool:
+def create_annotated_video(
+    candidate: pd.Series,
+    policy: pd.DataFrame,
+    output_path: str,
+    tracking: Optional[pd.DataFrame] = None,
+    role_lookup: Optional[Dict[int, Dict[str, object]]] = None,
+) -> bool:
     source_video = find_source_video(str(candidate["video_id"]))
     if source_video is None:
         logger.warning("Source video not found for %s in %s", candidate["video_id"], SOURCE_VIDEO_DIR)
         return False
 
-    tracking = pd.read_csv(str(candidate["csv_path"]), usecols=["yolo-id", "x-center", "y-center", "width", "height", "unique-id", "confidence", "frame-count"])
-    tracking = ensure_tracking_columns(tracking)
-    tracking = tracking[tracking["confidence"] >= MIN_CONFIDENCE].copy()
+    if tracking is None:
+        tracking = load_filtered_tracking(str(candidate["csv_path"]))
     normalised = looks_normalised(tracking)
 
     start_frame = int(candidate["start_frame_local"])
@@ -2257,8 +2404,11 @@ def create_annotated_video(candidate: pd.Series, policy: pd.DataFrame, output_pa
     segment_start = int(candidate["segment_start_time_s"])
     main_track_id = int(candidate["main_pedestrian_track_id"])
 
-    role_lookup = build_person_role_lookup(tracking[(tracking["frame-count"] >= start_frame) & (tracking["frame-count"] <= end_frame)].copy())
-    by_frame = {int(frame): group.copy() for frame, group in tracking.groupby("frame-count")}
+    clip_rows = tracking[(tracking["frame-count"] >= start_frame) & (tracking["frame-count"] <= end_frame)]
+    if role_lookup is None:
+        role_lookup = build_person_role_lookup(clip_rows)
+    by_frame = {int(frame): group for frame, group in clip_rows.groupby("frame-count")}
+    empty_frame = clip_rows.iloc[0:0]
     policy_by_frame = {int(row["frame_local"]): row for _, row in policy.iterrows()}
 
     cap = cv2.VideoCapture(source_video)
@@ -2275,6 +2425,15 @@ def create_annotated_video(candidate: pd.Series, policy: pd.DataFrame, output_pa
         cap.release()
         logger.warning("Invalid video metadata for %s", source_video)
         return False
+
+    csv_fps = float(candidate["fps"])
+    if abs(source_fps - csv_fps) > 0.1:
+        logger.warning(
+            "FPS mismatch for %s: tracking CSV fps=%.2f, video fps=%.2f — overlays may desync",
+            source_video,
+            csv_fps,
+            source_fps,
+        )
 
     absolute_start_frame = int(round(segment_start * source_fps)) + start_frame
     n_frames = end_frame - start_frame + 1
@@ -2302,7 +2461,7 @@ def create_annotated_video(candidate: pd.Series, policy: pd.DataFrame, output_pa
         if not ok:
             break
 
-        frame_rows = by_frame.get(local_frame, pd.DataFrame(columns=tracking.columns))
+        frame_rows = by_frame.get(local_frame, empty_frame)
         policy_row = policy_by_frame.get(local_frame)
         draw_tracks(frame, frame_rows, normalised, main_track_id, role_lookup=role_lookup)
 
@@ -2333,8 +2492,62 @@ def create_annotated_video(candidate: pd.Series, policy: pd.DataFrame, output_pa
 # MAIN
 # =============================================================================
 
+def write_run_metadata(output_dir: str) -> None:
+    """Record the CONFIG values that produced this run, so outputs stay comparable across tuning runs."""
+    metadata = {
+        "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "external_signal_csv": EXTERNAL_SIGNAL_PATH,
+        "prefer_offline_model_when": PREFER_OFFLINE_MODEL_WHEN,
+        "use_proxy_when_if_offline_missing": USE_PROXY_WHEN_IF_OFFLINE_MISSING,
+        "reuse_existing_ranking": REUSE_EXISTING_RANKING,
+        "filters": {
+            "only_localities": sorted(ONLY_LOCALITIES),
+            "only_countries": sorted(ONLY_COUNTRIES),
+            "only_iso3": sorted(ONLY_ISO3),
+            "only_video_ids": sorted(ONLY_VIDEO_IDS),
+        },
+        "discovery": {
+            "max_tracking_csv_files": MAX_TRACKING_CSV_FILES,
+            "min_tracking_csv_bytes": MIN_TRACKING_CSV_BYTES,
+            "prefer_local_source_videos": PREFER_LOCAL_SOURCE_VIDEOS,
+            "clip_seconds": CLIP_SECONDS,
+            "stride_seconds": STRIDE_SECONDS,
+            "top_k_clips": TOP_K_CLIPS,
+            "max_windows_per_csv": MAX_WINDOWS_PER_CSV,
+            "min_confidence": MIN_CONFIDENCE,
+            "min_main_pedestrian_seconds": MIN_MAIN_PEDESTRIAN_SECONDS,
+        },
+        "thresholds": {
+            "crossing_trigger": CROSSING_TRIGGER_THRESHOLD,
+            "interaction_trigger": INTERACTION_TRIGGER_THRESHOLD,
+            "density_trigger": DENSITY_TRIGGER_THRESHOLD,
+            "occlusion_trigger": OCCLUSION_TRIGGER_THRESHOLD,
+            "risk_trigger": RISK_TRIGGER_THRESHOLD,
+            "anomaly_trigger": ANOMALY_TRIGGER_THRESHOLD,
+            "direct_when_crossing": DIRECT_WHEN_CROSSING_THRESHOLD,
+            "direct_when_interaction": DIRECT_WHEN_INTERACTION_THRESHOLD,
+            "direct_when_risk": DIRECT_WHEN_RISK_THRESHOLD,
+            "direct_when_occlusion_crossing": DIRECT_WHEN_OCCLUSION_CROSSING_THRESHOLD,
+            "direct_when_occlusion_interaction": DIRECT_WHEN_OCCLUSION_INTERACTION_THRESHOLD,
+            "persistence_seconds": PERSISTENCE_SECONDS,
+            "offline_ambiguity": OFFLINE_AMBIGUITY_THRESHOLD,
+            "offline_uncertainty": OFFLINE_UNCERTAINTY_THRESHOLD,
+            "offline_trajectory_conflict": OFFLINE_TRAJECTORY_CONFLICT_THRESHOLD,
+            "offline_low_confidence": OFFLINE_LOW_CONFIDENCE_THRESHOLD,
+            "style_complexity": STYLE_COMPLEXITY_THRESHOLD,
+            "min_when_interval_seconds": MIN_WHEN_INTERVAL_SECONDS,
+            "max_gap_to_merge_s": MAX_GAP_TO_MERGE_S,
+        },
+    }
+    metadata_path = os.path.join(output_dir, "run_metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as file_handle:
+        json.dump(metadata, file_handle, indent=2)
+    logger.info("Run metadata saved to %s", metadata_path)
+
+
 def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    write_run_metadata(OUTPUT_DIR)
 
     model_mapping = build_model_signal_mapping()
     model_mapping_path = os.path.join(OUTPUT_DIR, "mark_model_signal_mapping.csv")
@@ -2349,30 +2562,41 @@ def main() -> None:
     mapping_segments.to_csv(mapping_segments_path, index=False)
     mapping_lookup = build_mapping_lookup(mapping_segments)
 
-    logger.info("Loaded mapping.csv: %d original rows expanded to %d video segments", len(pd.read_csv(MAPPING_CSV)), len(mapping_segments))
     logger.info("Tracking CSV directory: %s", TRACKING_CSV_DIR)
 
-    tracking_csvs = find_tracking_csvs(mapping_lookup)
-    if not tracking_csvs:
-        raise FileNotFoundError(
-            "No YOLOv11 + BoT SORT tracking CSV files matched mapping.csv. Check config['data'], CSV filenames, and mapping.csv."
-        )
-
-    logger.info("Scoring %d selected YOLOv11 + BoT SORT tracking CSV files", len(tracking_csvs))
-    all_scores: List[Dict[str, object]] = []
-    for csv_path in tqdm(tracking_csvs, desc="Scoring stress test clips"):
-        all_scores.extend(score_tracking_csv(csv_path, mapping_lookup))
-
-    if not all_scores:
-        raise ValueError("No candidate windows were scored. Check YOLOv11 + BoT SORT tracking CSV content and confidence threshold.")
-
-    candidates = pd.DataFrame(all_scores)
-    candidates = candidates[candidates["stress_test_score"] > 0].copy()
-    candidates = candidates.sort_values("stress_test_score", ascending=False).reset_index(drop=True)
-    candidates.insert(0, "rank", np.arange(1, len(candidates) + 1))
-
     ranked_path = os.path.join(OUTPUT_DIR, "ranked_stress_test_clips.csv")
-    candidates.to_csv(ranked_path, index=False)
+    if REUSE_EXISTING_RANKING and os.path.isfile(ranked_path):
+        logger.info("REUSE_EXISTING_RANKING=True: reusing cached ranking from %s (skipping CSV scoring)", ranked_path)
+        candidates = pd.read_csv(ranked_path)
+        candidates["video_id"] = candidates["video_id"].astype(str)
+    else:
+        tracking_csvs = find_tracking_csvs(mapping_lookup)
+        if not tracking_csvs:
+            raise FileNotFoundError(
+                "No YOLOv11 + BoT SORT tracking CSV files matched mapping.csv. Check config['data'], CSV filenames, and mapping.csv."
+            )
+
+        logger.info("Scoring %d selected YOLOv11 + BoT SORT tracking CSV files", len(tracking_csvs))
+        all_scores: List[Dict[str, object]] = []
+        skipped_csvs = 0
+        for csv_path in tqdm(tracking_csvs, desc="Scoring stress test clips"):
+            try:
+                all_scores.extend(score_tracking_csv(csv_path, mapping_lookup))
+            except Exception as exc:
+                skipped_csvs += 1
+                logger.warning("Skipping unreadable tracking CSV %s: %s", csv_path, exc)
+        if skipped_csvs:
+            logger.warning("Skipped %d tracking CSV files due to read/parse errors", skipped_csvs)
+
+        if not all_scores:
+            raise ValueError("No candidate windows were scored. Check YOLOv11 + BoT SORT tracking CSV content and confidence threshold.")
+
+        candidates = pd.DataFrame(all_scores)
+        candidates = candidates[candidates["stress_test_score"] > 0].copy()
+        candidates = candidates.sort_values("stress_test_score", ascending=False).reset_index(drop=True)
+        candidates.insert(0, "rank", np.arange(1, len(candidates) + 1))
+
+        candidates.to_csv(ranked_path, index=False)
 
     top = candidates.head(TOP_K_CLIPS).copy()
     top_path = os.path.join(OUTPUT_DIR, "selected_stress_test_clips.csv")
@@ -2381,12 +2605,32 @@ def main() -> None:
     external_signals = load_external_signals(EXTERNAL_SIGNAL_PATH)
     all_when_intervals: List[pd.DataFrame] = []
 
-    for _, candidate in top.iterrows():
+    expected_clip_dirs = {f"rank_{int(row['rank']):03d}_{row['video_id']}" for _, row in top.iterrows()}
+    stale_clip_dirs = [
+        path for path in sorted(glob.glob(os.path.join(OUTPUT_DIR, "rank_*")))
+        if os.path.isdir(path) and os.path.basename(path) not in expected_clip_dirs
+    ]
+    if stale_clip_dirs:
+        logger.warning(
+            "OUTPUT_DIR contains %d rank_* directories from a previous run that this run will not refresh: %s",
+            len(stale_clip_dirs),
+            ", ".join(os.path.basename(path) for path in stale_clip_dirs),
+        )
+
+    for clip_index, (_, candidate) in enumerate(top.iterrows(), start=1):
         rank = int(candidate["rank"])
+        logger.info("Processing clip %d/%d: rank %03d %s", clip_index, len(top), rank, candidate["video_id"])
         clip_dir = os.path.join(OUTPUT_DIR, f"rank_{rank:03d}_{candidate['video_id']}")
         os.makedirs(clip_dir, exist_ok=True)
 
-        policy = compute_policy_for_clip(candidate, external_signals)
+        # Load and role-classify the clip once; the policy and video phases share it.
+        tracking = load_filtered_tracking(str(candidate["csv_path"]))
+        start_frame = int(candidate["start_frame_local"])
+        end_frame = int(candidate["end_frame_local"])
+        clip_rows = tracking[(tracking["frame-count"] >= start_frame) & (tracking["frame-count"] <= end_frame)].copy()
+        role_lookup = build_person_role_lookup(clip_rows)
+
+        policy = compute_policy_for_clip(candidate, external_signals, tracking=tracking, role_lookup=role_lookup)
         policy_csv = os.path.join(clip_dir, FRAME_POLICY_FILENAME)
         policy.to_csv(policy_csv, index=False)
 
@@ -2406,7 +2650,11 @@ def main() -> None:
 
         if CREATE_ANNOTATED_VIDEO:
             video_path = os.path.join(clip_dir, "annotated_policy_demo.mp4")
-            created = create_annotated_video(candidate, policy, video_path)
+            try:
+                created = create_annotated_video(candidate, policy, video_path, tracking=tracking, role_lookup=role_lookup)
+            except Exception as exc:
+                created = False
+                logger.warning("Annotated video failed for rank %03d (%s): %s", rank, candidate["video_id"], exc)
             if created:
                 logger.info("Saved annotated demo video: %s", video_path)
 

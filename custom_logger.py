@@ -18,7 +18,9 @@ class CustomLogger:
 
     def __init__(self, name):
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(5)
+        # Leave the logger at NOTSET so it inherits the level configured on the
+        # root logger (logging.basicConfig / logmod.logs) instead of forcing
+        # every message through regardless of the configured threshold.
 
     def debug(self, msg, *args, **kwargs):
         self.log(logging.DEBUG, msg, *args, **kwargs)
@@ -37,5 +39,9 @@ class CustomLogger:
 
     def log(self, level, msg, *args, **kwargs):
         if self.logger.isEnabledFor(level):
-            msg = msg.format(*args)
+            # Only apply '{}' formatting when args are given: pre-formatted
+            # messages (f-strings) may legitimately contain literal braces,
+            # and msg.format() would raise on them.
+            if args:
+                msg = msg.format(*args)
             self.logger._log(level, msg, args=(), **kwargs)

@@ -73,10 +73,11 @@ def logs(
     if save_level:
         if program_name is None:
             program_name = 'noname'
-        date_str = dt.datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
+        date_str = dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')
         log_filename = 'log_{}_{}.log'.format(program_name, date_str)
         if path is None:
             path = common.log_dir
+        os.makedirs(path, exist_ok=True)
         file_handler = logging.FileHandler(filename=os.path.join(path,
                                                                  log_filename))
         file_handler.setFormatter(formatter)
