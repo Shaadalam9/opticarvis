@@ -315,8 +315,14 @@ BODY_BLUR = 15
 
 # Opacity ramps, measured in image rows from the ribbon's own near / far ends,
 # so they adapt to however tall the projected ribbon turns out to be.
-BODY_ALPHA = 0.42
-MARKS_ALPHA = 0.95
+# These are TRUE opacities: alpha comes from a coverage mask, so changing
+# ROAD_PATH_COLOUR no longer changes how transparent the ribbon is. The values are
+# the ones the old luminance-derived path happened to render, so the look is
+# unchanged - they are simply honest now, and the rails and the dashed centre line
+# get their own constants instead of sharing one that they silently disagreed on.
+BODY_ALPHA = 0.28
+RAILS_ALPHA = 0.64
+DASH_ALPHA = 0.82
 FADE_IN_PX = 16.0
 FADE_OUT_PX = 55.0
 
@@ -755,10 +761,22 @@ def resolve_lane_center(lane_data, height, width, lane_state):
     return {"near_u": near_u, "far_u": far_u, "confidence": conf}
 
 
-def _ease_profile(rows):
-    """Smoothstep 0..1 over the ribbon's rows (near end -> far end)."""
-    s = np.arange(rows + 1, dtype=np.float32) / max(1.0, float(rows))
-    return s * s * (3.0 - 2.0 * s)
+def perspective_profile(rows, near_v):
+    """Fraction of the near-end lateral offset that survives at each ribbon row.
+
+    A straight line on the ground images as a STRAIGHT line in the picture that
+    converges on the vanishing point, so its horizontal offset from the vanishing
+    column shrinks in exact proportion to (v - HORIZON_V) - reaching zero only at
+    the horizon, not at the ribbon's far end.
+
+    Interpolating with a smoothstep over row index instead (what this used to do)
+    made the ribbon both bend and converge far too early: with the near end one
+    lane to the left, the far end landed ~31 px too far toward the image centre
+    and the middle of the ribbon bowed ~15 px, which reads as the path drifting
+    out of the ego lane into the next one.
+    """
+    vs = near_v - np.arange(rows + 1, dtype=np.float32)
+    return (vs - HORIZON_V) / max(1e-6, float(near_v - HORIZON_V))
 
 
 def project_vo_centerline(vo_pts):
@@ -834,10 +852,13 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
             mid = float(np.median(central))
 
     # The lane detection supplies only the near-field lateral placement (which lane
-    # the car is in). The far end aims at the vanishing point: a straight path in
-    # the ego lane converges to the VP, so this keeps the ribbon pointing straight
-    # down the lane. Steering the far end with the noisy far-lane column instead
-    # tilted the ribbon off the real path (it pointed where the car was not going).
+    # the car is in). The ribbon then runs as the straight ground line through that
+    # point, which converges on the VANISHING COLUMN at the horizon - note "at the
+    # horizon", not at the ribbon's far end: the ribbon stops well short of the
+    # horizon, so its far end keeps part of the near-end offset. Collapsing it onto
+    # the vanishing column at the far end instead swung the ribbon out of the ego
+    # lane toward the middle of the road. Steering the far end from the noisy
+    # far-lane column had the same effect, for a different reason.
     # Genuine curvature comes from the VO blend below, only on a confident turn.
     near_anchor = float(lane_center["near_u"]) if lane_center else float(VANISH_U)
     far_anchor = float(VANISH_U)
@@ -873,7 +894,7 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
             vo_vs, vo_us = projected
             covered = (row_grid >= vo_vs[0]) & (row_grid <= vo_vs[-1])
             if covered.any() and float(np.interp(near_v, vo_vs, vo_us)) is not None:
-                straight = near_u + (far_u - near_u) * _ease_profile(rows)
+                straight = far_u + (near_u - far_u) * perspective_profile(rows, near_v)
                 vo_curve = np.interp(row_grid, vo_vs, vo_us).astype(np.float32)
                 vo_curve = vo_curve + (near_u - float(np.interp(near_v, vo_vs, vo_us)))
                 offsets = (vo_curve - straight) * covered.astype(np.float32)
@@ -903,14 +924,17 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
             applied = prev_applied + delta
         vo_state["applied"] = applied
 
+    # far_u is the column the path converges on AT THE HORIZON, so the ribbon is the
+    # straight ground line through the lane anchor: offset from that column decays
+    # in proportion to (v - HORIZON_V) and is still partly present at the far end.
+    profile = perspective_profile(rows, near_v)
+
     centre = []
     left = []
     right = []
     for i in range(rows + 1):
         v = near_v - i
-        s = i / max(1.0, float(rows))
-        ease = s * s * (3.0 - 2.0 * s)
-        cu = near_u + (far_u - near_u) * ease + float(applied[i])
+        cu = far_u + (near_u - far_u) * float(profile[i]) + float(applied[i])
         half = RIBBON_HALF_M * (v - HORIZON_V) / CAM_HEIGHT_M
         centre.append((cu, v))
         left.append((cu - half, v))
@@ -947,7 +971,7 @@ def row_alpha_profile(height, near_v, far_v):
     return np.minimum(near_ramp, far_ramp)
 
 
-def draw_world_dashes(layer, traj):
+def draw_world_dashes(layer, traj, colour=255):
     """Paint a dashed centre line whose dashes are spaced in world metres.
 
     Because each dash spans a fixed world distance, the projected dashes compress
@@ -976,11 +1000,11 @@ def draw_world_dashes(layer, traj):
         thickness = int(clamp(round((mid_v - HORIZON_V) * 0.02), 1, 5))
 
         arr = np.round(np.array(points, dtype=np.float32)).astype(np.int32)
-        cv2.polylines(layer, [arr], False, ROAD_PATH_CORE_COLOUR, thickness, cv2.LINE_AA)
+        cv2.polylines(layer, [arr], False, colour, thickness, cv2.LINE_AA)
 
 
-def draw_centerline_dashes(layer, centre_arr):
-    """Dashed centre line for the road-aimed ribbon (image-space, per centre point)."""
+def draw_centerline_dashes(layer, centre_arr, colour=255):
+    """Dashed centre line for the per-frame ribbon (image-space, per centre point)."""
     period = 16
     fill = 8
     n = len(centre_arr)
@@ -991,7 +1015,7 @@ def draw_centerline_dashes(layer, centre_arr):
             mid_v = seg[len(seg) // 2][1]
             thickness = int(clamp(round((mid_v - HORIZON_V) * 0.02), 1, 5))
             cv2.polylines(layer, [np.round(seg).astype(np.int32)], False,
-                          ROAD_PATH_CORE_COLOUR, thickness, cv2.LINE_AA)
+                          colour, thickness, cv2.LINE_AA)
         i += period
 
 
@@ -1020,36 +1044,44 @@ def build_path_overlay(geometry, height, width):
     shadow_blur = CONTACT_SHADOW_BLUR | 1
     shadow_cov = cv2.GaussianBlur(shadow_cov, (shadow_blur, shadow_blur), 0)
 
-    # Soft matte body.
-    body = np.zeros((height, width, 3), dtype=np.uint8)
-    cv2.fillPoly(body, [geometry["polygon"]], ROAD_PATH_COLOUR)
+    # Every layer's alpha comes from a real COVERAGE mask, never from the fill
+    # colour's luminance. Deriving alpha from luminance (what this used to do) tied
+    # opacity to the colour choice - BODY_ALPHA 0.42 actually rendered at 0.28, the
+    # rails and the dashed centre line landed at 0.64 and 0.82 while sharing one
+    # constant, and blurred edges faded toward black instead of toward transparent.
+    body_cov = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(body_cov, [geometry["polygon"]], 255)
     body_blur = BODY_BLUR | 1
-    body = cv2.GaussianBlur(body, (body_blur, body_blur), 0)
+    body_cov = cv2.GaussianBlur(body_cov, (body_blur, body_blur), 0)
 
-    # Crisp rails plus the world-spaced dashed centre line.
-    marks = np.zeros((height, width, 3), dtype=np.uint8)
+    rails_cov = np.zeros((height, width), dtype=np.uint8)
     left = np.round(geometry["left"]).astype(np.int32)
     right = np.round(geometry["right"]).astype(np.int32)
-    cv2.polylines(marks, [left], False, ROAD_PATH_COLOUR, 2, cv2.LINE_AA)
-    cv2.polylines(marks, [right], False, ROAD_PATH_COLOUR, 2, cv2.LINE_AA)
+    cv2.polylines(rails_cov, [left], False, 255, 2, cv2.LINE_AA)
+    cv2.polylines(rails_cov, [right], False, 255, 2, cv2.LINE_AA)
+
+    dash_cov = np.zeros((height, width), dtype=np.uint8)
     if geometry.get("traj") is not None:
-        draw_world_dashes(marks, geometry["traj"])
+        draw_world_dashes(dash_cov, geometry["traj"], colour=255)
     else:
-        draw_centerline_dashes(marks, geometry["centre"])
+        draw_centerline_dashes(dash_cov, geometry["centre"], colour=255)
 
     a_shadow = (shadow_cov.astype(np.float32) / 255.0) * profile_col * CONTACT_SHADOW_ALPHA
-    a_body = (
-        cv2.cvtColor(body, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    ) * profile_col * BODY_ALPHA
-    a_marks = (
-        cv2.cvtColor(marks, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    ) * profile_col * MARKS_ALPHA
+    a_body = (body_cov.astype(np.float32) / 255.0) * profile_col * BODY_ALPHA
+    a_rails = (rails_cov.astype(np.float32) / 255.0) * profile_col * RAILS_ALPHA
+    a_dashes = (dash_cov.astype(np.float32) / 255.0) * profile_col * DASH_ALPHA
+
+    def flat(colour):
+        layer = np.empty((height, width, 3), dtype=np.float32)
+        layer[:, :] = colour
+        return layer
 
     black = np.zeros((height, width, 3), dtype=np.float32)
     layers = [
         (black, a_shadow),
-        (body.astype(np.float32), a_body),
-        (marks.astype(np.float32), a_marks),
+        (flat(ROAD_PATH_COLOUR), a_body),
+        (flat(ROAD_PATH_COLOUR), a_rails),
+        (flat(ROAD_PATH_CORE_COLOUR), a_dashes),
     ]
 
     premul = np.zeros((height, width, 3), dtype=np.float32)

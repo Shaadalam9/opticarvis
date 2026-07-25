@@ -139,7 +139,7 @@ where the vehicle is **not** going is worse than no overlay at all.
 | Aspect | Source | Notes |
 |---|---|---|
 | **Lateral placement** (near end) | Lane instances (UFLDv2) | Which lane the vehicle is in. Gated on a plausible lane width and on detection confidence; falls back to straight when unsure. |
-| **Direction** (far end) | The vanishing point | A straight path in the ego lane converges there. Earlier versions steered the far end from the road-mask centroid, and then from the lane detector's noisy far column — **both tilted the ribbon off the real path**. Do not reintroduce either. |
+| **Direction** | The vanishing point, at the horizon | The ribbon is the exact image of a straight ground line: its offset from the vanishing column shrinks in proportion to `(v - HORIZON_V)`, reaching zero only **at the horizon**. Because the ribbon stops short of the horizon, its far end still holds part of the near-end offset. Collapsing it onto the vanishing column at the ribbon's far end instead — or easing between the two with a smoothstep — bends the ribbon out of the ego lane toward the middle of the road. Steering the far end from the road-mask centroid or the lane detector's noisy far column had the same effect for different reasons. Do not reintroduce any of these. |
 | **Curvature** | Future-frame visual odometry only | Blended in only while a genuine turn is detected. Measured separation: straight roads stay under ~2.5 m of in-window lateral spread, real turns run 4–6 m. |
 | **Stability** | EMA + per-frame rate limits | The near anchor and the VO contribution are each capped at 2.5 px/frame, so one bad detection cannot jerk the ribbon. |
 
@@ -295,9 +295,9 @@ state on each run.
 - **Visual odometry is monocular and planar.** It assumes flat ground and the
   configured calibration; it estimates path *shape* well, not survey-grade motion.
 - **Calibration is per-camera.** The defaults are tuned for one 1280×720 dashcam;
-  re-tune with `--calibrate` for other footage or the ribbon will sit wrong.
-- **Ribbon opacity is approximate.** Layer alpha is currently scaled by fill-colour
-  luminance, so effective opacity does not exactly match the configured constants.
+  re-tune with `--calibrate` for other footage or the ribbon will sit wrong. In
+  particular the ribbon's direction is only correct if `VANISH_U` / `HORIZON_V`
+  really are the road's vanishing point for your camera.
 
 ## Licence
 
