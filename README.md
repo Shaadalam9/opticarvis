@@ -44,6 +44,7 @@ The overlay is composed of:
 | Element | Meaning |
 |---|---|
 | **Cyan ribbon** | Where the vehicle is going, projected onto the road plane with correct perspective |
+| **Flowing chevrons** | Direction arrowheads spaced in world metres that march forward along the path — they foreshorten like real road paint and communicate motion intent |
 | **Contour highlights** | The road users the vehicle is reacting to (stable track IDs, temporally smoothed) |
 | **Distance labels** | Metric distance from monocular depth, scale-aligned on the road plane |
 | **Occlusion** | The ribbon passes *behind* people and vehicles, so it reads as paint on asphalt |
@@ -136,12 +137,18 @@ flowchart TD
 Worth reading before changing anything here, because a path overlay that points
 where the vehicle is **not** going is worse than no overlay at all.
 
+How a frame becomes a ribbon — lane polylines, the straddle pick with its width
+gate, the tracked anchor projected as a ground line converging on the vanishing
+point, and the final composite:
+
+![How the ribbon is derived, step by step](docs/images/derivation.jpg)
+
 | Aspect | Source | Notes |
 |---|---|---|
 | **Lateral placement** (near end) | Lane instances (UFLDv2) | Which lane the vehicle is in. Gated on a plausible lane width and on detection confidence; falls back to straight when unsure. |
 | **Direction** | The vanishing point, at the horizon | The ribbon is the exact image of a straight ground line: its offset from the vanishing column shrinks in proportion to `(v - HORIZON_V)`, reaching zero only **at the horizon**. Because the ribbon stops short of the horizon, its far end still holds part of the near-end offset. Collapsing it onto the vanishing column at the ribbon's far end instead — or easing between the two with a smoothstep — bends the ribbon out of the ego lane toward the middle of the road. Steering the far end from the road-mask centroid or the lane detector's noisy far column had the same effect for different reasons. Do not reintroduce any of these. |
-| **Curvature** | Future-frame visual odometry only | Blended in only while a genuine turn is detected. Measured separation: straight roads stay under ~2.5 m of in-window lateral spread, real turns run 4–6 m. |
-| **Stability** | EMA + per-frame rate limits | The near anchor and the VO contribution are each capped at 2.5 px/frame, so one bad detection cannot jerk the ribbon. |
+| **Curvature** | Lane-curve fit + visual odometry | Two sources, both bounded. (1) A ground-plane quadratic fitted to the two boundary polylines follows *gentle* bends when the paint is visible — its curvature is capped (R ≥ ~83 m) and measured fits on straight roads come out R = 1400–4000 m, so it cannot invent a curve. (2) Future-frame visual odometry takes over for genuine turns, where boundary coverage collapses; it blends in only while a real turn is detected (straight roads stay under ~2.5 m of in-window lateral spread, real turns run 4–6 m). |
+| **Stability** | Trust-gated velocity tracker | The lane anchor is an alpha-beta tracker whose gains scale with detection confidence. It tracks a *moving* lane centre without the lag of a plain EMA (which made the ribbon trail behind), and it **coasts through detection dropouts** — a crosswalk or worn paint is no new information, not evidence the lane moved to the image centre. Only a sustained lane-less stretch eases the anchor back to straight. Innovation is clamped so one bad frame cannot jerk the ribbon. |
 
 A deliberate consequence: **gentle curves render as near-straight.** That is the
 chosen trade — never confidently point somewhere the vehicle is not going.
@@ -262,6 +269,7 @@ needs no code edits.
 | `OPTICARVIS_VIDEO_ID` | `TuCsyBF3nHU` | Clip identity for per-clip artefacts |
 | `OPTICARVIS_SEGMENT_START_S` | `4630` | Segment start, used in artefact names |
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |
+| `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
 | `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns |
 | `OPTICARVIS_EGO_LOOKAHEAD` | `0` | Legacy phase-correlation look-ahead; superseded by VO |
 | `OPTICARVIS_GEMMA4_MODEL` | `google/gemma-4-E2B-it` | Explanation-gate model |
@@ -286,9 +294,11 @@ state on each run.
 
 ## Known limitations
 
-- **Gentle curves read as straight.** Curvature comes only from visual odometry
-  during a confident turn — see [the contract](#what-shapes-the-ribbon-the-contract).
-  This is intentional.
+- **Curves need evidence.** Gentle bends are followed only while both lane
+  boundaries are visible (the curve fit decays to straight otherwise), and sharp
+  turns only while visual odometry confidently detects them — see
+  [the contract](#what-shapes-the-ribbon-the-contract). A bend with no visible
+  paint and no VO confidence renders as straight, by design.
 - **Turn following is validated on a moderate curve**, plus a synthesised 90° arc
   projection. No sharp/90° turn exists in the footage used so far, so that case is
   unverified on real data.

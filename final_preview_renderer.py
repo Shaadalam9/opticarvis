@@ -270,9 +270,13 @@ VO_TURN_LAT_HI = 5.5              # m at/above which the ribbon is fully VO-shap
                                  # straight road peaks at 2.2 m, the real curve runs 4.0-6.2 m, so
                                  # this band suppresses phantom turns (weight 0.00) while a genuine
                                  # turn still reaches full weight.
-VO_WEIGHT_SMOOTH = 0.08           # EMA weight on the turn weight across frames
-VO_MAX_STEP_PX = 2.5              # max per-row, per-frame move of the VO contribution, so the
-                                 # far end eases like the near anchor does
+VO_WEIGHT_SMOOTH = 0.20           # EMA weight on the turn weight across frames. Replaying the
+                                 # turn clip: at 0.08 (+2.5 px step) the drawn bend trailed the
+                                 # instantaneous VO bend by ~0.4 s and stopped ~15 px shy of its
+                                 # full depth; 0.20 + 8 px tracks it closely. The VO path is an
+                                 # integrated trajectory and inherently smooth, so the light
+                                 # smoothing costs no visible jitter.
+VO_MAX_STEP_PX = 8.0              # max per-row, per-frame move of the VO contribution
 
 # Ego-lane centering (Solution B): detect the lane the car is actually in (from
 # YOLOP lane lines) and center the ribbon between its markings, instead of
@@ -289,11 +293,24 @@ USE_LANE_CENTERING = True
 LANE_SOURCE = os.environ.get("OPTICARVIS_LANE_SOURCE", "ufldv2")
 LANE_CONF_FULL_TRUST = 0.25       # valid-row fraction that earns full lane trust
 LANE_CENTER_CAP_PX = 140.0        # max lane-centre offset from straight (VANISH_U)
-LANE_CENTER_SMOOTH = 0.08         # EMA weight on the lane centre across frames (slow =
-                                 # the ribbon settles into a lane rather than swimming)
-LANE_CENTER_MAX_STEP_PX = 2.5     # max lane-centre move per frame; rate-limits the EMA
-                                 # so a transient misdetection cannot jerk the ribbon
-                                 # (a genuine shift still eases in over ~0.7 s).
+# Anchor tracker (alpha-beta with a velocity state, gains scaled by detection
+# trust). Two lessons are baked in, both measured on recorded lane series:
+#   * a plain EMA + step cap lags a MOVING lane centre by ~8 frames / 5 px, which
+#     read on screen as the ribbon "trailing behind" the car's own lane;
+#   * a detection DROPOUT (crosswalk, worn paint, dashed-line gap) is not
+#     evidence that the lane centre is at the image centre - it is no new
+#     information. Blending toward VANISH_U by trust made the target a square
+#     wave (in-lane -> centre -> in-lane every few seconds) and the ribbon
+#     visibly wandered chasing it. The tracker now COASTS through dropouts and
+#     only relaxes toward straight once the lanes have been gone for a while.
+LANE_TRACK_ALPHA = 0.30           # position gain at full trust
+LANE_TRACK_BETA = 0.035           # velocity gain at full trust
+LANE_TRACK_VMAX = 5.0             # max tracked velocity, px/frame
+LANE_TRACK_GATE_PX = 25.0         # innovation clamp: one bad frame moves x <= alpha*this
+LANE_TRACK_MIN_TRUST = 0.05       # below this the frame counts as a dropout (coast)
+LANE_HOLD_FRAMES = 75             # coast this long (~2.5 s) before relaxing to straight
+LANE_RELAX_RATE_PX = 0.6          # px/frame ease toward VANISH_U after the hold expires
+LANE_VEL_DECAY = 0.92             # per-frame velocity decay while coasting
 LANE_SCAN_BOTTOM_MARGIN_PX = 15   # start the row scan this far above the image bottom
 LANE_DILATE_PX = 7                # horizontal dilation to bridge dashed-line gaps
 # Depth-scaled width plausibility: a real ego lane spans about LANE_WIDTH_REF_M
@@ -307,8 +324,34 @@ LANE_WIDTH_FRAC_HI = 1.70         # reject pairs wider than this (spanning two l
 LANE_EXTRAPOLATE_TOL_PX = 25.0    # how far past the lowest detected lane row the ribbon's near
                                  # row may sit before we stop trusting the (clamped) extrapolation
 
+# Lane-curve fit: unproject the two straddling boundary polylines to the ground
+# plane, fit a curvature-capped quadratic to their midline, and let the ribbon
+# follow it. Gentle bends with visible paint are followed; the caps mean a
+# straight road cannot be bent into a fake curve (measured fits on straight
+# frames come out R = 1400-4000 m, i.e. visually straight), and when the
+# boundaries do not span the near field the curve decays to zero and the ribbon
+# is the straight ground line as before. Real turns remain VO's job - boundary
+# coverage collapses exactly where sharp curvature lives.
+USE_LANE_CURVE = os.environ.get("OPTICARVIS_LANE_CURVE", "1") == "1"
+LANE_CURVE_MAX_K = 0.006          # |quadratic coeff| cap  ->  radius >= ~83 m
+LANE_CURVE_MAX_H = 0.15           # |heading| cap at the near anchor (rad-ish)
+LANE_CURVE_SMOOTH = 0.15          # trust-scaled gain on the tracked heading/curvature
+LANE_CURVE_DECAY = 0.95           # per-frame decay toward straight when the fit is absent
+LANE_CURVE_PICK_ROW = 620.0       # boundaries must span this near-field row to qualify
+LANE_CURVE_MIN_SPAN_M = 8.0       # minimum forward overlap of the two boundaries
+
 DASH_PERIOD_M = 3.0
 DASH_FILL_M = 1.5
+
+# Flowing chevrons on the per-frame ribbon (replace the static centre dashes):
+# arrowheads spaced in world metres that march forward along the path, so the
+# overlay communicates direction and intent, and small path corrections read as
+# motion rather than error. The world spacing means they compress toward the
+# horizon exactly like real road paint.
+CHEVRON_PERIOD_M = 3.0            # spacing between chevrons, metres along the path
+CHEVRON_LEN_M = 0.9               # forward extent of each chevron, metres
+CHEVRON_HALF_M = 0.32             # half-width of the arms, metres
+CHEVRON_SPEED_MPS = 5.0           # how fast the chevrons flow forward
 
 HORIZON_CLIP_MARGIN_PX = 4.0
 BODY_BLUR = 15
@@ -724,12 +767,81 @@ def ego_lane_center_from_instances(lanes, height, width):
     return near_u, far_u, confidence
 
 
-def resolve_lane_center(lane_data, height, width, lane_state):
-    """Confidence-blended, temporally smoothed ego-lane centre (near_u, far_u).
+def fit_lane_curve(lanes):
+    """Ground-plane quadratic fit y(d) of the ego lane's midline, or None.
 
-    Blends the raw detection toward straight (VANISH_U) by confidence and caps the
-    offset, then EMA-smooths + rate-limits across frames via lane_state. Returns
-    None when lane centering is off / unavailable so the caller keeps the
+    Picks the boundary polylines straddling the vanishing column at a near-field
+    row, unprojects both to the road plane (d = f*h/(v-horizon), y = (u-VU)*d/f),
+    and fits their midline with a distance-weighted, one-pass-robust quadratic.
+    Returns (c2, c1, c0) with c2/c1 clamped to the curvature/heading caps.
+    """
+    if not lanes:
+        return None
+
+    pick_row = LANE_CURVE_PICK_ROW
+    candidates = []
+    for lane in lanes:
+        order = np.argsort(lane[:, 1])
+        ys, xs = lane[order, 1], lane[order, 0]
+        if pick_row < ys[0] - 3 or pick_row > ys[-1] + 3:
+            continue                      # must span the near field
+        candidates.append((float(np.interp(pick_row, ys, xs)), ys, xs))
+    left = [c for c in candidates if c[0] < VANISH_U]
+    right = [c for c in candidates if c[0] >= VANISH_U]
+    if not (left and right):
+        return None
+    _, yl_v, xl_u = max(left, key=lambda c: c[0])
+    _, yr_v, xr_u = min(right, key=lambda c: c[0])
+
+    def to_ground(v, u):
+        mask = v > HORIZON_V + 30
+        d = CAM_FOCAL_PX * CAM_HEIGHT_M / (v[mask] - HORIZON_V)
+        y = (u[mask] - VANISH_U) * d / CAM_FOCAL_PX
+        order = np.argsort(d)
+        return d[order], y[order]
+
+    dl, yl = to_ground(yl_v, xl_u)
+    dr, yr = to_ground(yr_v, xr_u)
+    if len(dl) < 4 or len(dr) < 4:
+        return None
+    d0 = max(dl.min(), dr.min(), 6.0)
+    d1 = min(dl.max(), dr.max(), 32.0)
+    if d1 - d0 < LANE_CURVE_MIN_SPAN_M:
+        return None
+
+    grid = np.linspace(d0, d1, 40)
+    midline = 0.5 * (np.interp(grid, dl, yl) + np.interp(grid, dr, yr))
+    weights = 1.0 / grid                          # near points weigh more
+    c2, c1, c0 = np.polyfit(grid, midline, 2, w=weights)
+    residual = np.abs(np.polyval([c2, c1, c0], grid) - midline)
+    scale = np.median(residual) * 1.48 + 1e-6
+    weights = weights / np.maximum(1.0, residual / (2.5 * scale))
+    c2, c1, c0 = np.polyfit(grid, midline, 2, w=weights)
+
+    c2 = float(np.clip(c2, -LANE_CURVE_MAX_K, LANE_CURVE_MAX_K))
+    c1 = float(np.clip(c1, -LANE_CURVE_MAX_H, LANE_CURVE_MAX_H))
+    return c2, c1, float(c0)
+
+
+def resolve_lane_center(lane_data, height, width, lane_state):
+    """Tracked ego-lane anchor (near_u) with coast-through-dropout behaviour.
+
+    An alpha-beta tracker whose gains scale with detection trust:
+
+      * confident detection  -> measurement update toward the measured lane centre
+        (full offset, NOT blended toward the image centre - the plausibility gates
+        already rejected implausible geometry, so low confidence means "weigh it
+        less", not "assume the centre"). The velocity state absorbs steady drift,
+        so a moving lane centre is tracked without the EMA's ~8-frame lag that
+        read as the ribbon trailing behind.
+      * dropout (crosswalk, worn paint, dashed gap) -> COAST: hold course with a
+        decaying velocity. The lane does not teleport to the image centre because
+        the detector blinked; chasing the old trust-blended target visibly walked
+        the ribbon to the centre and back on every dropout.
+      * sustained dropout (a real lane-less stretch, > LANE_HOLD_FRAMES) -> ease
+        gently toward straight ahead (VANISH_U).
+
+    Returns None when lane centering is off / unavailable so the caller keeps the
     straight-ahead ribbon. lane_data is UFLDv2 lane instances (LANE_SOURCE
     "ufldv2") or a YOLOP lane mask ("yolop").
     """
@@ -737,28 +849,65 @@ def resolve_lane_center(lane_data, height, width, lane_state):
         return None
 
     if LANE_SOURCE == "ufldv2":
-        raw_near, raw_far, conf = ego_lane_center_from_instances(lane_data, height, width)
+        raw_near, _raw_far, conf = ego_lane_center_from_instances(lane_data, height, width)
     else:
-        raw_near, raw_far, conf = ego_lane_center(lane_data, height, width)
+        raw_near, _raw_far, conf = ego_lane_center(lane_data, height, width)
     trust = min(1.0, conf / LANE_CONF_FULL_TRUST)
 
-    def blended(raw):
-        offset = float(np.clip(raw - VANISH_U, -LANE_CENTER_CAP_PX, LANE_CENTER_CAP_PX))
-        return VANISH_U + trust * offset
+    measurement = VANISH_U + float(
+        np.clip(raw_near - VANISH_U, -LANE_CENTER_CAP_PX, LANE_CENTER_CAP_PX))
 
-    def follow(target, previous):
-        if previous is None:
-            return target
-        smoothed = LANE_CENTER_SMOOTH * target + (1.0 - LANE_CENTER_SMOOTH) * previous
-        step = float(np.clip(smoothed - previous, -LANE_CENTER_MAX_STEP_PX, LANE_CENTER_MAX_STEP_PX))
-        return previous + step
+    x = lane_state.get("near_u")
+    vel = lane_state.get("vel", 0.0)
+    dropout = lane_state.get("dropout", 0)
 
-    near_u = follow(blended(raw_near), lane_state.get("near_u"))
-    far_u = follow(blended(raw_far), lane_state.get("far_u"))
-    lane_state["near_u"] = near_u
-    lane_state["far_u"] = far_u
+    if x is None:
+        x = measurement if trust > LANE_TRACK_MIN_TRUST else float(VANISH_U)
+        vel = 0.0
+    else:
+        x = x + vel
+        if trust > LANE_TRACK_MIN_TRUST:
+            innovation = float(np.clip(measurement - x,
+                                       -LANE_TRACK_GATE_PX, LANE_TRACK_GATE_PX))
+            x = x + LANE_TRACK_ALPHA * trust * innovation
+            vel = vel + LANE_TRACK_BETA * trust * innovation
+            dropout = 0
+        else:
+            vel = vel * LANE_VEL_DECAY
+            dropout += 1
+            if dropout > LANE_HOLD_FRAMES:
+                x = x + float(np.clip(VANISH_U - x, -LANE_RELAX_RATE_PX, LANE_RELAX_RATE_PX))
+    vel = float(np.clip(vel, -LANE_TRACK_VMAX, LANE_TRACK_VMAX))
+    x = float(np.clip(x, VANISH_U - LANE_CENTER_CAP_PX, VANISH_U + LANE_CENTER_CAP_PX))
+
+    # Lane-curve state (heading + curvature at the near anchor), tracked with the
+    # same philosophy: trust-scaled updates when a fit exists, decay toward
+    # straight when it does not. The caps make a fake curve impossible to hold.
+    heading = lane_state.get("heading", 0.0)
+    curvature = lane_state.get("curvature", 0.0)
+    fit = None
+    if USE_LANE_CURVE and LANE_SOURCE == "ufldv2" and trust > LANE_TRACK_MIN_TRUST:
+        fit = fit_lane_curve(lane_data)
+    if fit is not None:
+        c2, c1, _c0 = fit
+        d_near = CAM_FOCAL_PX * CAM_HEIGHT_M / RIBBON_NEAR_ROWS
+        h_meas = float(np.clip(c1 + 2.0 * c2 * d_near, -LANE_CURVE_MAX_H, LANE_CURVE_MAX_H))
+        k_meas = c2
+        heading = heading + LANE_CURVE_SMOOTH * trust * (h_meas - heading)
+        curvature = curvature + LANE_CURVE_SMOOTH * trust * (k_meas - curvature)
+    else:
+        heading *= LANE_CURVE_DECAY
+        curvature *= LANE_CURVE_DECAY
+    heading = float(np.clip(heading, -LANE_CURVE_MAX_H, LANE_CURVE_MAX_H))
+    curvature = float(np.clip(curvature, -LANE_CURVE_MAX_K, LANE_CURVE_MAX_K))
+
+    lane_state["near_u"] = x
+    lane_state["vel"] = vel
+    lane_state["dropout"] = dropout
     lane_state["confidence"] = conf
-    return {"near_u": near_u, "far_u": far_u, "confidence": conf}
+    lane_state["heading"] = heading
+    lane_state["curvature"] = curvature
+    return {"near_u": x, "heading": heading, "curvature": curvature, "confidence": conf}
 
 
 def perspective_profile(rows, near_v):
@@ -876,6 +1025,23 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
     far_v = HORIZON_V + RIBBON_FAR_ROWS
     near_u = near_anchor
     rows = int(round(near_v - far_v))
+    row_grid = np.array([near_v - i for i in range(rows + 1)], dtype=np.float32)
+
+    # Baseline centreline from the tracked ground curve. y(d) is a quadratic in
+    # forward distance through the near anchor; with heading = curvature = 0 this
+    # is EXACTLY the straight ground line (offset from the vanishing column decays
+    # with (v - HORIZON_V), still partly present at the far end - see
+    # perspective_profile's docstring for why it must not reach the VP early).
+    # The legacy far_u term is zero unless the (disabled) look-ahead is active.
+    heading = float(lane_center.get("heading", 0.0)) if lane_center else 0.0
+    curvature = float(lane_center.get("curvature", 0.0)) if lane_center else 0.0
+    depths = CAM_FOCAL_PX * CAM_HEIGHT_M / (row_grid - HORIZON_V)
+    d_near = float(depths[0])
+    y_near = (near_u - VANISH_U) * d_near / CAM_FOCAL_PX
+    y_lat = y_near + heading * (depths - d_near) + curvature * (depths - d_near) ** 2
+    base_u = (VANISH_U + CAM_FOCAL_PX * y_lat / depths
+              + (far_u - VANISH_U) * (1.0 - (row_grid - HORIZON_V) / (near_v - HORIZON_V))
+              ).astype(np.float32)
 
     # Hybrid VO turn shape. The weight ramps up only as the in-window path bends
     # hard and is EMA smoothed; the VO centreline is shifted so its near end sits
@@ -884,8 +1050,6 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
     # clamps every row to one column and the shift cancels it exactly, which
     # rendered a dead-vertical (or wrong-side) ribbon while reporting full VO
     # weight. Partial coverage is tapered instead of silently clamped.
-    row_grid = np.array([near_v - i for i in range(rows + 1)], dtype=np.float32)
-
     target_w = 0.0
     vo_offsets = None
     if USE_VO_TRAJECTORY and vo_pts:
@@ -893,11 +1057,10 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
         if projected is not None:
             vo_vs, vo_us = projected
             covered = (row_grid >= vo_vs[0]) & (row_grid <= vo_vs[-1])
-            if covered.any() and float(np.interp(near_v, vo_vs, vo_us)) is not None:
-                straight = far_u + (near_u - far_u) * perspective_profile(rows, near_v)
+            if covered.any():
                 vo_curve = np.interp(row_grid, vo_vs, vo_us).astype(np.float32)
                 vo_curve = vo_curve + (near_u - float(np.interp(near_v, vo_vs, vo_us)))
-                offsets = (vo_curve - straight) * covered.astype(np.float32)
+                offsets = (vo_curve - base_u) * covered.astype(np.float32)
                 # Only trust VO where it actually has samples for these rows.
                 coverage = float(covered.mean())
                 if coverage > 0.35:
@@ -924,17 +1087,12 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
             applied = prev_applied + delta
         vo_state["applied"] = applied
 
-    # far_u is the column the path converges on AT THE HORIZON, so the ribbon is the
-    # straight ground line through the lane anchor: offset from that column decays
-    # in proportion to (v - HORIZON_V) and is still partly present at the far end.
-    profile = perspective_profile(rows, near_v)
-
     centre = []
     left = []
     right = []
     for i in range(rows + 1):
         v = near_v - i
-        cu = far_u + (near_u - far_u) * float(profile[i]) + float(applied[i])
+        cu = float(base_u[i]) + float(applied[i])
         half = RIBBON_HALF_M * (v - HORIZON_V) / CAM_HEIGHT_M
         centre.append((cu, v))
         left.append((cu - half, v))
@@ -1019,7 +1177,60 @@ def draw_centerline_dashes(layer, centre_arr, colour=255):
         i += period
 
 
-def build_path_overlay(geometry, height, width):
+def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255):
+    """Flowing direction chevrons along the ribbon centreline.
+
+    Chevrons sit at fixed world distances along the path (period CHEVRON_PERIOD_M)
+    with the whole pattern advanced by phase_m, so incrementing phase_m per frame
+    makes them march forward. Each chevron's on-screen size follows its depth, so
+    the pattern foreshortens like real road paint. Drawn as a coverage layer
+    (grey value = colour) exactly like the dashes it replaces.
+    """
+    if len(centre_arr) < 3:
+        return
+    vs = centre_arr[:, 1]
+    us = centre_arr[:, 0]
+    order = np.argsort(vs)                 # ascending v (far -> near)
+    vs_sorted = vs[order]
+    us_sorted = us[order]
+
+    d_near = CAM_FOCAL_PX * CAM_HEIGHT_M / (float(vs.max()) - HORIZON_V)
+    d_far = CAM_FOCAL_PX * CAM_HEIGHT_M / (float(vs.min()) - HORIZON_V)
+
+    distance = d_near + (phase_m % CHEVRON_PERIOD_M) - CHEVRON_PERIOD_M
+    while distance < d_far:
+        distance += CHEVRON_PERIOD_M
+        if distance < d_near or distance > d_far:
+            continue
+        v = HORIZON_V + CAM_FOCAL_PX * CAM_HEIGHT_M / distance
+        if not (vs_sorted[0] <= v <= vs_sorted[-1]):
+            continue
+        u = float(np.interp(v, vs_sorted, us_sorted))
+        # local forward direction of the path (toward smaller v)
+        v_ahead = max(float(vs_sorted[0]), v - 6.0)
+        u_ahead = float(np.interp(v_ahead, vs_sorted, us_sorted))
+        tangent = np.array([u_ahead - u, v_ahead - v], dtype=np.float64)
+        norm = float(np.hypot(*tangent))
+        if norm < 1e-6:
+            continue
+        tangent /= norm
+        perp = np.array([-tangent[1], tangent[0]])
+
+        length_px = CAM_FOCAL_PX * CAM_HEIGHT_M * CHEVRON_LEN_M / (distance * distance)
+        half_px = CAM_FOCAL_PX * CHEVRON_HALF_M / distance
+        point = np.array([u, v])
+        apex = point + tangent * (0.6 * length_px)
+        tail_l = point - tangent * (0.4 * length_px) - perp * half_px
+        tail_r = point - tangent * (0.4 * length_px) + perp * half_px
+        thickness = int(clamp(round((v - HORIZON_V) * 0.02), 1, 5))
+        for tail in (tail_l, tail_r):
+            cv2.line(layer,
+                     tuple(np.round(apex).astype(int)),
+                     tuple(np.round(tail).astype(int)),
+                     colour, thickness, cv2.LINE_AA)
+
+
+def build_path_overlay(geometry, height, width, chevron_phase_m=0.0):
     """Precompute the static ribbon as a premultiplied overlay.
 
     The ribbon is identical for every frame, so its shadow / body / dashed-mark
@@ -1064,7 +1275,7 @@ def build_path_overlay(geometry, height, width):
     if geometry.get("traj") is not None:
         draw_world_dashes(dash_cov, geometry["traj"], colour=255)
     else:
-        draw_centerline_dashes(dash_cov, geometry["centre"], colour=255)
+        draw_centerline_chevrons(dash_cov, geometry["centre"], chevron_phase_m, colour=255)
 
     a_shadow = (shadow_cov.astype(np.float32) / 255.0) * profile_col * CONTACT_SHADOW_ALPHA
     a_body = (body_cov.astype(np.float32) / 255.0) * profile_col * BODY_ALPHA
@@ -1126,7 +1337,7 @@ def blend_path(frame, overlay, occlusion=None, gain=1.0):
 
 def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geometry,
                           aim_state, lookahead_offset=0.0, lane_data=None, lane_state=None,
-                          vo_pts=None, vo_state=None):
+                          vo_pts=None, vo_state=None, chevron_phase_m=0.0):
     """Return (overlay, near_v, far_v) for this frame.
 
     With the road-aimed ribbon enabled and a road mask available, the ribbon
@@ -1141,7 +1352,7 @@ def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geo
         geometry = aimed_ribbon_geometry(
             road_binary, height, width, aim_state, lookahead_offset, lane_center,
             vo_pts=vo_pts, vo_state=vo_state)
-        overlay = build_path_overlay(geometry, height, width)
+        overlay = build_path_overlay(geometry, height, width, chevron_phase_m)
         return overlay, geometry["near_v"], geometry["far_v"]
     near_v = static_geometry["near_v"] if static_geometry else float(height)
     far_v = static_geometry["far_v"] if static_geometry else 0.0
@@ -1771,7 +1982,8 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
         frame_overlay, frame_near_v, frame_far_v = resolve_frame_overlay(
             road_binary, height, width, overlay, geometry, aim_state, lookahead_offset,
-            lane_data=lane_data, lane_state=lane_state, vo_pts=vo_pts, vo_state=vo_state)
+            lane_data=lane_data, lane_state=lane_state, vo_pts=vo_pts, vo_state=vo_state,
+            chevron_phase_m=(index / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
         base = (orig.astype(np.float32) * (1.0 - BACKGROUND_DIM_ALPHA * ramp_value)).astype(np.uint8)
         reveal = reveal_rows_for(ramp_value, frame_near_v, frame_far_v, height)
         blend_path(base, frame_overlay, occlusion, gain=reveal)
@@ -1981,7 +2193,8 @@ def render_video(effect_plan):
 
         frame_overlay, _, _ = resolve_frame_overlay(
             road_binary, height, width, overlay, geometry, aim_state,
-            lane_data=lane_data, lane_state=lane_state)
+            lane_data=lane_data, lane_state=lane_state,
+            chevron_phase_m=(rendered_frames / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
         base = dim_background(result.orig_img)
         blend_path(base, frame_overlay, occlusion)
 
