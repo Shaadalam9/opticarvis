@@ -78,6 +78,14 @@ detected.
 
 ![Ribbon following a reconstructed turn](docs/images/turn_following.jpg)
 
+The look-ahead walks the reconstructed path by **distance** (30 m), not time — a
+90° turn spans the same metres at any speed, so even a slow intersection turn taken
+at walking pace is anticipated and drawn. Below, a real ~80° left turn through an
+intersection at ~8 km/h: the bend appears as the turn enters the horizon and the
+ribbon sweeps left with the vehicle's actual path.
+
+![A real slow intersection turn, anticipated and drawn](docs/images/intersection_turn.jpg)
+
 ### The overlay only appears when it is warranted
 
 A vision-language model gates the explanation. Self-evident situations get a clean
@@ -147,7 +155,7 @@ point, and the final composite:
 |---|---|---|
 | **Lateral placement** (near end) | Lane instances (UFLDv2) | Which lane the vehicle is in. Gated on a plausible lane width and on detection confidence; falls back to straight when unsure. |
 | **Direction** | The vanishing point, at the horizon | The ribbon is the exact image of a straight ground line: its offset from the vanishing column shrinks in proportion to `(v - HORIZON_V)`, reaching zero only **at the horizon**. Because the ribbon stops short of the horizon, its far end still holds part of the near-end offset. Collapsing it onto the vanishing column at the ribbon's far end instead — or easing between the two with a smoothstep — bends the ribbon out of the ego lane toward the middle of the road. Steering the far end from the road-mask centroid or the lane detector's noisy far column had the same effect for different reasons. Do not reintroduce any of these. |
-| **Curvature** | Lane-curve fit + visual odometry | Two sources, both bounded. (1) A ground-plane quadratic fitted to the two boundary polylines follows *gentle* bends when the paint is visible — its curvature is capped (R ≥ ~83 m) and measured fits on straight roads come out R = 1400–4000 m, so it cannot invent a curve. (2) Future-frame visual odometry takes over for genuine turns, where boundary coverage collapses; it blends in only while a real turn is detected (straight roads stay under ~2.5 m of in-window lateral spread, real turns run 4–6 m). |
+| **Curvature** | Lane-curve fit + visual odometry | Two sources, both bounded. (1) A ground-plane quadratic fitted to the two boundary polylines follows *gentle* bends when the paint is visible — its curvature is capped (R ≥ ~83 m) and measured fits on straight roads come out R = 1400–4000 m, so it cannot invent a curve. (2) Future-frame visual odometry takes over for genuine turns, where boundary coverage collapses; its look-ahead walks the reconstructed path by **distance** (30 m — a time window is blind to slow turns), and it blends in only while a real turn is detected (straight roads stay under ~2.5 m of in-window lateral spread; real turns exceed it several-fold). |
 | **Stability** | Trust-gated velocity tracker | The lane anchor is an alpha-beta tracker whose gains scale with detection confidence. It tracks a *moving* lane centre without the lag of a plain EMA (which made the ribbon trail behind), and it **coasts through detection dropouts** — a crosswalk or worn paint is no new information, not evidence the lane moved to the image centre. Only a sustained lane-less stretch eases the anchor back to straight. Innovation is clamped so one bad frame cannot jerk the ribbon. |
 
 A deliberate consequence: **gentle curves render as near-straight.** That is the
@@ -299,9 +307,10 @@ state on each run.
   turns only while visual odometry confidently detects them — see
   [the contract](#what-shapes-the-ribbon-the-contract). A bend with no visible
   paint and no VO confidence renders as straight, by design.
-- **Turn following is validated on a moderate curve**, plus a synthesised 90° arc
-  projection. No sharp/90° turn exists in the footage used so far, so that case is
-  unverified on real data.
+- **Turn following is validated on real data at two speeds**: a moderate curve at
+  ~26 km/h and a sharp (~80°) intersection turn taken at ~8 km/h. The look-ahead is
+  distance-based (30 m) precisely so that slow turns are not missed — a time-based
+  window is blind to them.
 - **Visual odometry is monocular and planar.** It assumes flat ground and the
   configured calibration; it estimates path *shape* well, not survey-grade motion.
 - **Calibration is per-camera.** The defaults are tuned for one 1280×720 dashcam;

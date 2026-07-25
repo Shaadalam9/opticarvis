@@ -21,7 +21,7 @@ calibration (d = f*H/(v - horizon)):
     dominated by translational parallax and fabricates turns on straight roads.
 
 Integrating (yaw, forward) gives a top-down ego path. For each frame we then
-express the next LOOKAHEAD_S seconds of that path in the frame's own coordinates
+express the next LOOKAHEAD_M metres of that path in the frame's own coordinates
 (x_forward, y_lateral) - exactly what project_ground_point expects.
 
 SIGN CONVENTION (do not "simplify" this): internally the path is built in the
@@ -32,7 +32,7 @@ out, so the emitted y_lateral is RIGHT-positive and matches the renderer. Gettin
 this wrong mirrors every turn - the ribbon points where the car is not driving.
 
 Run:
-    python ego_trajectory.py <clip.mp4> <out_trajectory.json> [lookahead_s]
+    python ego_trajectory.py <clip.mp4> <out_trajectory.json> [lookahead_m]
 """
 
 import sys
@@ -61,7 +61,15 @@ GROUND_MIN_ROWS = 60.0     # ignore features closer than this many rows to the h
 MAX_STEP_M = 2.0           # reject implausible per-frame forward steps
 STEP_DECAY = 0.90          # decay (not latch) the forward step when flow is unusable
 
-LOOKAHEAD_S = 4.0          # how far ahead to expose per-frame future path
+# Lookahead is measured in DISTANCE, not time. A time window is speed-dependent
+# and therefore blind to slow turns: a genuine 90-degree turn taken at crawling
+# speed (7-8 km/h through an intersection) produces almost no lateral
+# displacement within 4 s, and the 4 s path does not even reach the ribbon's
+# drawn range - which made the pipeline miss a real turn. A turn is a property
+# of the path; the lookahead walks LOOKAHEAD_M metres along it however long that
+# takes, bounded by LOOKAHEAD_MAX_S so a parked car does not scan to clip end.
+LOOKAHEAD_M = 30.0         # how far ahead to expose per-frame future path, metres
+LOOKAHEAD_MAX_S = 20.0     # time cap on the forward walk
 DEFAULT_STEP_M = 0.0       # start from rest; the first valid flow sets the speed
 MIN_FORWARD_M = 0.2        # drop path points at/behind the camera
 STRIDE_M = 1.0             # thin path samples by ARC length, not forward distance
@@ -168,12 +176,16 @@ def reconstruct_path(clip_video):
     return fps, x, y, psi
 
 
-def future_trajectories(x, y, psi, fps, lookahead_s=LOOKAHEAD_S, stride_m=STRIDE_M):
+def future_trajectories(x, y, psi, fps, lookahead_m=LOOKAHEAD_M, max_s=LOOKAHEAD_MAX_S,
+                        stride_m=STRIDE_M):
     """Per-frame future path in that frame's local coords.
 
-    For frame i, transforms the global path points ahead of it (up to
-    lookahead_s) into frame i's frame: x_forward ahead of the car, y_lateral to
-    the side. y_lateral is emitted RIGHT-positive to match
+    For frame i, transforms the global path points ahead of it into frame i's
+    frame - x_forward ahead of the car, y_lateral to the side - walking forward
+    until the path reaches lookahead_m metres ahead (or the max_s time cap, so a
+    stationary stretch does not scan to clip end). Distance-based lookahead is
+    what makes slow turns visible: the same 90-degree turn spans the same metres
+    at any speed. y_lateral is emitted RIGHT-positive to match
     project_ground_point / LATERAL_SIGN (see the module docstring).
 
     Samples are thinned by ARC length so a tight turn keeps the samples that
@@ -183,10 +195,10 @@ def future_trajectories(x, y, psi, fps, lookahead_s=LOOKAHEAD_S, stride_m=STRIDE
     downstream interpolation over image rows is well defined.
     """
     n = len(x)
-    la = int(round(lookahead_s * fps))
+    frame_cap = int(round(max_s * fps))
     out = []
     for i in range(n):
-        j_end = min(i + la, n - 1)
+        j_end = min(i + frame_cap, n - 1)
         cos_i = np.cos(-psi[i])
         sin_i = np.sin(-psi[i])
         pts = []
@@ -208,6 +220,8 @@ def future_trajectories(x, y, psi, fps, lookahead_s=LOOKAHEAD_S, stride_m=STRIDE
             last_fwd = fwd
             last_lat = lat
             pts.append([round(float(fwd), 3), round(float(lat), 3)])
+            if last_fwd >= lookahead_m:
+                break
         out.append(pts)
     return out
 
@@ -215,19 +229,20 @@ def future_trajectories(x, y, psi, fps, lookahead_s=LOOKAHEAD_S, stride_m=STRIDE
 def main():
     clip = sys.argv[1]
     out = sys.argv[2]
-    lookahead = float(sys.argv[3]) if len(sys.argv) > 3 else LOOKAHEAD_S
+    lookahead = float(sys.argv[3]) if len(sys.argv) > 3 else LOOKAHEAD_M
 
     fps, x, y, psi = reconstruct_path(clip)
     if not (fps and fps > 1.0):
         print("Refusing to continue: video reports fps=%r (cannot build a time horizon)." % fps)
         raise SystemExit(1)
 
-    traj = future_trajectories(x, y, psi, fps, lookahead_s=lookahead)
+    traj = future_trajectories(x, y, psi, fps, lookahead_m=lookahead)
     write_json(out, {
         "clip_video": clip,
         "fps": fps,
         "frame_count": len(x),
-        "lookahead_s": lookahead,
+        "lookahead_m": lookahead,
+        "lookahead_max_s": LOOKAHEAD_MAX_S,
         "focal_px": FOCAL_PX,
         "cam_height_m": CAM_HEIGHT_M,
         "horizon_v": HORIZON_V,

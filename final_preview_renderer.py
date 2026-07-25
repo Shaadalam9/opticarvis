@@ -232,8 +232,12 @@ RIBBON_AIM_BIAS = 0.0             # DISABLED, and deliberately so: aiming the fa
 RIBBON_AIM_CAP_PX = 70.0          # DEAD while RIBBON_AIM_BIAS is 0
 RIBBON_AIM_SMOOTH = 0.07          # EMA weight on the far aim across frames (lower = slower,
                                  # more natural; the far end eases rather than darts)
-RIBBON_NEAR_ROWS = 150.0          # ribbon near end, rows below the horizon
-RIBBON_FAR_ROWS = 48.0           # ribbon far end, rows below the horizon (shorter = fewer far-field issues)
+RIBBON_NEAR_ROWS = 150.0          # ribbon near end, rows below the horizon (~8.7 m)
+RIBBON_FAR_ROWS = 62.0           # ribbon far end, rows below the horizon (~21 m).
+                                 # Shortened from 48 (~27 m): the far field is where any
+                                 # per-frame estimate noise is most visible, and the last
+                                 # 6 m of ribbon carried most of the perceived jitter on
+                                 # the turn clip while adding little information.
 
 # Look-ahead: bend the ribbon into an upcoming turn using the ego-motion track
 # (ego_motion.py), read LOOKAHEAD_S seconds into the future. During a turn the
@@ -277,6 +281,12 @@ VO_WEIGHT_SMOOTH = 0.20           # EMA weight on the turn weight across frames.
                                  # integrated trajectory and inherently smooth, so the light
                                  # smoothing costs no visible jitter.
 VO_MAX_STEP_PX = 8.0              # max per-row, per-frame move of the VO contribution
+VO_OFFSET_SMOOTH = 0.35           # EMA on the applied VO offsets before the rate clamp:
+                                 # the raw per-frame VO projection wiggles a few px
+                                 # frame-to-frame, and at full weight that wiggle painted
+                                 # visible jitter on the bend. 0.35 keeps the response
+                                 # inside ~3 frames (no return of the trailing) while
+                                 # averaging the wiggle away.
 
 # Ego-lane centering (Solution B): detect the lane the car is actually in (from
 # YOLOP lane lines) and center the ribbon between its markings, instead of
@@ -335,7 +345,13 @@ LANE_EXTRAPOLATE_TOL_PX = 25.0    # how far past the lowest detected lane row th
 USE_LANE_CURVE = os.environ.get("OPTICARVIS_LANE_CURVE", "1") == "1"
 LANE_CURVE_MAX_K = 0.006          # |quadratic coeff| cap  ->  radius >= ~83 m
 LANE_CURVE_MAX_H = 0.15           # |heading| cap at the near anchor (rad-ish)
-LANE_CURVE_SMOOTH = 0.15          # trust-scaled gain on the tracked heading/curvature
+LANE_CURVE_SMOOTH = 0.08          # trust-scaled gain on the tracked heading/curvature.
+                                 # Decomposing the far-row wiggle on the turn clip showed
+                                 # the curve state was the dominant jitter source (anchor
+                                 # 0.69 px, +curve 1.42 px, VO negligible); 0.08 halves it
+                                 # while a gentle bend still acquires within ~0.5 s.
+LANE_CURVE_STEP_H = 0.004         # max per-frame heading change (a dropout->redetect used
+LANE_CURVE_STEP_K = 0.00015       # to slam a fresh fit in at full gain: 12 px far-row step)
 LANE_CURVE_DECAY = 0.95           # per-frame decay toward straight when the fit is absent
 LANE_CURVE_PICK_ROW = 620.0       # boundaries must span this near-field row to qualify
 LANE_CURVE_MIN_SPAN_M = 8.0       # minimum forward overlap of the two boundaries
@@ -367,7 +383,8 @@ BODY_ALPHA = 0.28
 RAILS_ALPHA = 0.64
 DASH_ALPHA = 0.82
 FADE_IN_PX = 16.0
-FADE_OUT_PX = 55.0
+FADE_OUT_PX = 35.0                # shorter far fade to suit the shorter ribbon (with 55 the
+                                 # fade regions covered most of the 88 remaining rows)
 
 # Subtle contact shadow that grounds the ribbon (offset down, blurred, faded).
 CONTACT_SHADOW_ALPHA = 0.18
@@ -893,8 +910,10 @@ def resolve_lane_center(lane_data, height, width, lane_state):
         d_near = CAM_FOCAL_PX * CAM_HEIGHT_M / RIBBON_NEAR_ROWS
         h_meas = float(np.clip(c1 + 2.0 * c2 * d_near, -LANE_CURVE_MAX_H, LANE_CURVE_MAX_H))
         k_meas = c2
-        heading = heading + LANE_CURVE_SMOOTH * trust * (h_meas - heading)
-        curvature = curvature + LANE_CURVE_SMOOTH * trust * (k_meas - curvature)
+        heading += float(np.clip(LANE_CURVE_SMOOTH * trust * (h_meas - heading),
+                                 -LANE_CURVE_STEP_H, LANE_CURVE_STEP_H))
+        curvature += float(np.clip(LANE_CURVE_SMOOTH * trust * (k_meas - curvature),
+                                   -LANE_CURVE_STEP_K, LANE_CURVE_STEP_K))
     else:
         heading *= LANE_CURVE_DECAY
         curvature *= LANE_CURVE_DECAY
@@ -1076,14 +1095,16 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
         vo_weight = target_w
 
     # Smooth + rate-limit the VO contribution per row, so the far end cannot jump
-    # frame to frame (the lane rate limiter only bounds the near anchor).
+    # frame to frame (the lane rate limiter only bounds the near anchor). The EMA
+    # averages the raw projection's per-frame wiggle; the clamp bounds the worst case.
     applied = np.zeros(rows + 1, dtype=np.float32)
     if vo_offsets is not None and vo_weight > 0.005:
         applied = vo_offsets * vo_weight
     if vo_state is not None:
         prev_applied = vo_state.get("applied")
         if prev_applied is not None and len(prev_applied) == len(applied):
-            delta = np.clip(applied - prev_applied, -VO_MAX_STEP_PX, VO_MAX_STEP_PX)
+            smoothed = VO_OFFSET_SMOOTH * applied + (1.0 - VO_OFFSET_SMOOTH) * prev_applied
+            delta = np.clip(smoothed - prev_applied, -VO_MAX_STEP_PX, VO_MAX_STEP_PX)
             applied = prev_applied + delta
         vo_state["applied"] = applied
 
