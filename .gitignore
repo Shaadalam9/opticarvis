@@ -224,3 +224,12 @@ config
 secret
 _output
 videos
+
+# script backups (set_external_signal_csv.py)
+*.bak
+*.py.before_external_signal_backup.py
+
+# model weights (re-downloaded on first use; up to ~140 MB each)
+# YOLO26/YOLO11 segmentation checkpoints, UFLDv2 lane weights.
+*.pt
+*.pth

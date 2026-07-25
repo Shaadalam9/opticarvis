@@ -1,0 +1,554 @@
+r"""Stage 2: Gemma4 explanation timing gate.
+
+Correct workflow:
+Alpamayo output plus selected scene frames are fed to Gemma4.
+Gemma4 decides whether this is a proper time to explain.
+Only if Gemma4 says yes do segmentation, depth, MIRAGE and rendering run.
+
+Current version is a dry run placeholder with the final JSON contract.
+"""
+
+import json
+import os
+
+import cv2
+
+from pipeline_common import (
+    PROJECT_ROOT,
+    VIDEO_ID,
+    SEGMENT_START_TIME_S,
+    read_json,
+    write_json,
+)
+
+STATE_JSON = PROJECT_ROOT + "/workflow_outputs/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_workflow_state.json"
+CLIP_VIDEO = PROJECT_ROOT + "/alpamayo_outputs/crowd_clips/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_30s.mp4"
+OUTPUT_DIR = PROJECT_ROOT + "/workflow_outputs/gemma_reasoning"
+KEY_FRAME_DIR = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_key_frames"
+GEMMA_GATE_JSON = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_gemma_gate.json"
+GEMMA_PROMPT_JSON = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_gemma_prompt.json"
+GEMMA_COMPAT_JSON = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_gemma_reasoning.json"
+
+KEY_FRAME_POSITIONS = [0.25, 0.50, 0.75]
+GEMMA_MODE = "dry_run_placeholder"
+GEMMA_MODEL_ID = "Gemma4_gate_placeholder"
+
+# Real Gemma 4 multimodal gate. Falls back to the heuristic dry_run_gate if the
+# model is unavailable or its output cannot be parsed. Override the checkpoint
+# with OPTICARVIS_GEMMA4_MODEL (e.g. google/gemma-4-E2B-it for a faster gate).
+USE_REAL_GEMMA = True
+GEMMA4_MODEL_ID = os.environ.get("OPTICARVIS_GEMMA4_MODEL", "google/gemma-4-E2B-it")
+GEMMA4_MAX_NEW_TOKENS = 320
+
+
+def make_dirs():
+    if not os.path.isdir(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+    if not os.path.isdir(KEY_FRAME_DIR):
+        os.makedirs(KEY_FRAME_DIR)
+
+
+def extract_key_frames():
+    if not os.path.isfile(CLIP_VIDEO):
+        print("Missing clip video:", CLIP_VIDEO)
+        raise SystemExit(1)
+
+    cap = cv2.VideoCapture(CLIP_VIDEO)
+    if not cap.isOpened():
+        print("Could not open clip video:", CLIP_VIDEO)
+        raise SystemExit(1)
+
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = float(cap.get(cv2.CAP_PROP_FPS))
+    if frame_count <= 0:
+        print("Clip has no frames:", CLIP_VIDEO)
+        raise SystemExit(1)
+
+    frames = []
+    for position in KEY_FRAME_POSITIONS:
+        frame_index = int((frame_count - 1) * position)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ok, frame = cap.read()
+        if not ok:
+            print("Could not read frame:", frame_index)
+            raise SystemExit(1)
+
+        frame_file = KEY_FRAME_DIR + "/frame_" + str(frame_index).zfill(6) + ".jpg"
+        cv2.imwrite(frame_file, frame)
+        frames.append({
+            "frame_index": frame_index,
+            "frame_time_s": round(frame_index / fps, 3),
+            "frame_file": frame_file,
+        })
+
+    cap.release()
+    return {"clip_video": CLIP_VIDEO, "frame_count": frame_count, "fps": fps, "key_frames": frames}
+
+
+def display_target_for(scene_cause, action):
+    if scene_cause == "pedestrian_crosswalk_interaction":
+        return "pedestrians_and_crosswalk"
+    if scene_cause == "traffic_light_interaction":
+        return "traffic_light_and_stop_line"
+    if scene_cause == "vehicle_or_traffic_interaction":
+        return "relevant_vehicle_or_traffic_region"
+    if scene_cause == "construction_or_clearance_interaction":
+        return "construction_or_clearance_region"
+    if action == "turn":
+        return "planned_turn_region"
+    return "ego_future_path"
+
+
+def passenger_text_for(display_target, action):
+    if display_target == "pedestrians_and_crosswalk":
+        return "Yielding for pedestrians in the crosswalk"
+    if display_target == "traffic_light_and_stop_line":
+        return "Stopping for the traffic light"
+    if display_target == "relevant_vehicle_or_traffic_region":
+        return "Adjusting for nearby traffic"
+    if display_target == "construction_or_clearance_region":
+        return "Adjusting path for clearance"
+    if action == "turn":
+        return "Preparing to turn"
+    return "Vehicle behaviour adjusted for the scene"
+
+
+GEMMA_SYSTEM_PROMPT = (
+    "You are the explanation-timing gate for an autonomous vehicle's passenger "
+    "interface. You receive the AV planner's (Alpamayo) current output plus a key "
+    "frame. Decide whether THIS moment genuinely warrants a brief on-screen "
+    "explanation of the vehicle's behaviour.\n\n"
+    "Explanations must be RARE. The DEFAULT is do_not_explain. Explain only when "
+    "ALL of the following hold: (1) the vehicle is taking a noticeable action "
+    "(slowing, yielding, stopping, or swerving); (2) the CAUSE is not obvious "
+    "from the passenger's own view; and (3) the situation is unexpected or "
+    "safety-critical in a way the passenger would not already understand. If you "
+    "are not clearly convinced an explanation adds real value, return false.\n\n"
+    "Treat these as OBVIOUS -> do_not_explain (even if safety-relevant):\n"
+    "- yielding, slowing, or stopping for pedestrians at a MARKED or signalised "
+    "crosswalk;\n"
+    "- stopping at a clearly visible red light or stop sign;\n"
+    "- normal car-following, lane keeping, or routine speed changes;\n"
+    "- an empty or clear road ahead;\n"
+    "- people who are on the sidewalk or otherwise NOT in the vehicle's path.\n\n"
+    "Explain (proper_time_to_explain = true) ONLY for a genuinely non-obvious, "
+    "in-path hazard, for example:\n"
+    "- a pedestrian or cyclist who has moved INTO the vehicle's own driving lane "
+    "away from any crossing (jaywalking into the path);\n"
+    "- a road user or object emerging suddenly from occlusion into the path;\n"
+    "- an ambiguous conflict where the reason for the manoeuvre is genuinely "
+    "unclear.\n\n"
+    "If the planner reports a clear road or routine driving, return false. When "
+    "in any doubt, return false.\n\n"
+    "Respond with ONLY a single minified JSON object, no prose and no markdown, "
+    "with exactly these keys:\n"
+    '{"proper_time_to_explain": true|false, '
+    '"decision": "explain_now"|"do_not_explain", '
+    '"decision_reason": "<short technical reason>", '
+    '"passenger_facing_text": "<short on-screen text if explaining, else empty>", '
+    '"display_target": "pedestrians_and_crosswalk|traffic_light_and_stop_line|'
+    "relevant_vehicle_or_traffic_region|construction_or_clearance_region|"
+    'planned_turn_region|ego_future_path|none", '
+    '"confidence": <number between 0 and 1>}'
+)
+
+VALID_DISPLAY_TARGETS = {
+    "pedestrians_and_crosswalk",
+    "traffic_light_and_stop_line",
+    "relevant_vehicle_or_traffic_region",
+    "construction_or_clearance_region",
+    "planned_turn_region",
+    "ego_future_path",
+    "none",
+}
+
+_gemma_model = None
+
+
+def load_gemma4():
+    """Load and cache the Gemma 4 multimodal model + processor."""
+    global _gemma_model
+    if _gemma_model is None:
+        import torch
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # local_files_only avoids slow/hanging Hub metadata calls; the weights
+        # are expected to be cached already (download once with huggingface-cli).
+        processor = AutoProcessor.from_pretrained(
+            GEMMA4_MODEL_ID, padding_side="left", local_files_only=True
+        )
+        model = AutoModelForImageTextToText.from_pretrained(
+            GEMMA4_MODEL_ID,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            attn_implementation="sdpa",
+            local_files_only=True,
+        ).to(device).eval()
+        _gemma_model = (processor, model)
+    return _gemma_model
+
+
+def build_gemma_messages(state, frames):
+    """System + multimodal user message: Alpamayo context text + key frames."""
+    from PIL import Image
+
+    context = state.get("alpamayo_context", {})
+    alpamayo = {
+        "alpamayo_action": context.get("alpamayo_action"),
+        "alpamayo_reasoning_trace": context.get("alpamayo_reasoning_trace"),
+        "scene_cause": context.get("scene_cause"),
+        "uncertainty_score": context.get("uncertainty_score"),
+        "trajectory_metrics": context.get("trajectory_metrics"),
+    }
+
+    user_content = [
+        {
+            "type": "text",
+            "text": "Alpamayo planner analysis of the clip:\n" + json.dumps(alpamayo, indent=2),
+        }
+    ]
+
+    key_frames = frames.get("key_frames", [])
+    if key_frames:
+        user_content.append({"type": "text", "text": "Key frames sampled across the clip:"})
+        for key_frame in key_frames:
+            path = key_frame.get("frame_file")
+            if path and os.path.isfile(path):
+                user_content.append({"type": "image", "image": Image.open(path).convert("RGB")})
+
+    user_content.append({"type": "text", "text": "Now output the JSON decision object only."})
+
+    return [
+        {"role": "system", "content": [{"type": "text", "text": GEMMA_SYSTEM_PROMPT}]},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def parse_gate_json(text):
+    """Return the last complete top-level JSON object in text, or None.
+
+    Robust to any 'thinking' preamble the model may emit before the answer.
+    """
+    objects = []
+    depth = 0
+    start = None
+    for index, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    objects.append(text[start:index + 1])
+                    start = None
+    for chunk in reversed(objects):
+        try:
+            return json.loads(chunk)
+        except Exception:
+            continue
+    return None
+
+
+def gate_from_model_output(parsed, state, raw_text):
+    """Map the model's JSON to the gate contract used by the rest of the pipeline."""
+    context = state.get("alpamayo_context", {})
+    action = context.get("alpamayo_action", "continue")
+    scene_cause = context.get("scene_cause", "unclassified_driving_context")
+
+    proper = bool(parsed.get("proper_time_to_explain", False))
+
+    display_target = parsed.get("display_target") or "none"
+    if display_target not in VALID_DISPLAY_TARGETS:
+        display_target = "none"
+    if proper and display_target == "none":
+        display_target = display_target_for(scene_cause, action)
+    if not proper:
+        display_target = "none"
+
+    text = parsed.get("passenger_facing_text") or ""
+    if proper and not text:
+        text = passenger_text_for(display_target, action)
+    if not proper:
+        text = ""
+
+    try:
+        confidence = float(parsed.get("confidence", 0.7))
+    except (TypeError, ValueError):
+        confidence = 0.7
+    confidence = max(0.0, min(1.0, confidence))
+
+    decision = parsed.get("decision") or ("explain_now" if proper else "do_not_explain")
+    reason = parsed.get("decision_reason") or ""
+
+    return {
+        "video_id": VIDEO_ID,
+        "segment_start_time_s": SEGMENT_START_TIME_S,
+        "workflow_stage": "gemma4_explanation_timing_gate",
+        "mode": "gemma4_live",
+        "model_id": GEMMA4_MODEL_ID,
+        "model_called": True,
+        "proper_time_to_explain": proper,
+        "decision": decision,
+        "decision_reason": reason,
+        "passenger_facing_text": text,
+        "display_target": display_target,
+        "confidence": round(confidence, 3),
+        "alpamayo_context_used": {
+            "action": action,
+            "reasoning_trace": context.get("alpamayo_reasoning_trace"),
+            "scene_cause": scene_cause,
+            "uncertainty_score": context.get("uncertainty_score"),
+            "trajectory_metrics": context.get("trajectory_metrics"),
+        },
+        "raw_model_output": raw_text.strip(),
+        "important_note": "Live Gemma 4 multimodal gate over the Alpamayo context and key frames.",
+    }
+
+
+def run_gemma4_gate(state, frames):
+    """Run the real Gemma 4 gate; return the gate dict, or None to fall back."""
+    if not USE_REAL_GEMMA:
+        return None
+    try:
+        import torch
+
+        processor, model = load_gemma4()
+        messages = build_gemma_messages(state, frames)
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(model.device)
+        input_len = inputs["input_ids"].shape[-1]
+        with torch.no_grad():
+            output = model.generate(
+                **inputs, max_new_tokens=GEMMA4_MAX_NEW_TOKENS, do_sample=False
+            )
+        text = processor.decode(output[0][input_len:], skip_special_tokens=True)
+        parsed = parse_gate_json(text)
+        if parsed is None:
+            print("Gemma 4 output was not parseable JSON; using heuristic gate.")
+            print("Raw output:", text[:300])
+            return None
+        return gate_from_model_output(parsed, state, text)
+    except Exception as error:
+        print("Gemma 4 gate unavailable (%s); using heuristic gate." % error)
+        return None
+
+
+def build_prompt(state, frame_payload):
+    context = state.get("alpamayo_context", {})
+    prompt = {
+        "task": "Decide whether this is a proper time for an AV to explain its behaviour to a passenger.",
+        "instruction": "Do not explain every behaviour change. Explain only if the behaviour is non obvious, safety relevant, ambiguous, or useful for passenger trust.",
+        "alpamayo_context": {
+            "action": context.get("alpamayo_action"),
+            "reasoning_trace": context.get("alpamayo_reasoning_trace"),
+            "scene_cause": context.get("scene_cause"),
+            "uncertainty_score": context.get("uncertainty_score"),
+            "trajectory_metrics": context.get("trajectory_metrics"),
+        },
+        "selected_scene_frames": frame_payload.get("key_frames", []),
+        "required_output_schema": {
+            "proper_time_to_explain": "boolean",
+            "decision": "explain_now or do_not_explain",
+            "decision_reason": "short technical reason",
+            "passenger_facing_text": "short display text if explaining",
+            "display_target": "visual target if explaining",
+            "confidence": "0 to 1",
+        },
+    }
+    return prompt
+
+
+def dry_run_gate(state, prompt):
+    context = state.get("alpamayo_context", {})
+    action = context.get("alpamayo_action", "continue")
+    scene_cause = context.get("scene_cause", "unclassified_driving_context")
+    uncertainty = float(context.get("uncertainty_score", 0.0))
+    candidate = bool(context.get("candidate_context", False))
+
+    proper = False
+    reason = "No explanation needed because the behaviour does not appear non obvious or safety relevant."
+    confidence = 0.65
+
+    if candidate:
+        if scene_cause == "pedestrian_crosswalk_interaction":
+            proper = True
+            reason = "The vehicle is yielding for pedestrians in the crosswalk, which is safety relevant and useful for passenger understanding."
+            confidence = 0.78
+        elif scene_cause == "traffic_light_interaction" and action == "stop":
+            proper = False
+            reason = "Stopping for a clearly visible traffic light may be obvious, so an explanation is not always necessary."
+            confidence = 0.70
+        elif uncertainty >= 0.75:
+            proper = True
+            reason = "Alpamayo context is uncertain enough that a passenger explanation may be useful."
+            confidence = 0.72
+        elif action in ["nudge", "turn"]:
+            proper = True
+            reason = "The vehicle changes path or direction, which may not be obvious to the passenger."
+            confidence = 0.70
+        elif action == "slow_or_yield" and uncertainty >= 0.60:
+            proper = True
+            reason = "The vehicle slows or yields in a potentially ambiguous context."
+            confidence = 0.70
+
+    if proper:
+        target = display_target_for(scene_cause, action)
+        text = passenger_text_for(target, action)
+        decision = "explain_now"
+    else:
+        target = "none"
+        text = ""
+        decision = "do_not_explain"
+
+    return {
+        "video_id": VIDEO_ID,
+        "segment_start_time_s": SEGMENT_START_TIME_S,
+        "workflow_stage": "gemma4_explanation_timing_gate",
+        "mode": GEMMA_MODE,
+        "model_id": GEMMA_MODEL_ID,
+        "model_called": False,
+        "proper_time_to_explain": proper,
+        "decision": decision,
+        "decision_reason": reason,
+        "passenger_facing_text": text,
+        "display_target": target,
+        "confidence": confidence,
+        "alpamayo_context_used": prompt.get("alpamayo_context", {}),
+        "selected_scene_frames": prompt.get("selected_scene_frames", []),
+        "important_note": "Dry run gate with the same JSON contract expected from real Gemma4.",
+    }
+
+
+def display_plan_from_gate(gate):
+    if not gate.get("proper_time_to_explain", False):
+        return {"display_target": "none", "display_mode": "none", "display_intensity": "none", "label_text": ""}
+
+    if float(gate.get("confidence", 0.0)) >= 0.75:
+        intensity = "high"
+        mode = "mirage_augmented_highlight_plus_short_label"
+    else:
+        intensity = "medium"
+        mode = "mirage_subtle_highlight_plus_short_label"
+
+    return {
+        "display_target": gate.get("display_target"),
+        "display_mode": mode,
+        "display_intensity": intensity,
+        "label_text": gate.get("passenger_facing_text"),
+    }
+
+
+def write_compat_gemma_json(gate):
+    payload = {
+        "video_id": VIDEO_ID,
+        "segment_start_time_s": SEGMENT_START_TIME_S,
+        "status": gate.get("mode"),
+        "model_called": gate.get("model_called"),
+        "model_id": gate.get("model_id"),
+        "proper_time_to_explain": gate.get("proper_time_to_explain"),
+        "semantic_reason": gate.get("decision_reason"),
+        "causal_objects": ["pedestrians"] if gate.get("display_target") == "pedestrians_and_crosswalk" else [],
+        "causal_regions": ["crosswalk", "ego future path"] if gate.get("display_target") == "pedestrians_and_crosswalk" else [],
+        "recommended_display_target": gate.get("display_target"),
+        "recommended_display_text": gate.get("passenger_facing_text"),
+        "confidence": gate.get("confidence"),
+    }
+    write_json(GEMMA_COMPAT_JSON, payload)
+
+
+def update_state(state, gate):
+    proper = bool(gate.get("proper_time_to_explain", False))
+    context = state.get("alpamayo_context", {})
+    display_plan = display_plan_from_gate(gate)
+
+    state["outputs"]["gemma_gate_json"] = GEMMA_GATE_JSON
+    state["outputs"]["gemma_prompt_json"] = GEMMA_PROMPT_JSON
+    state["outputs"]["gemma_reasoning_json"] = GEMMA_COMPAT_JSON
+
+    state["gemma_gate"] = {
+        "required": context.get("gemma_gate_required", False),
+        "status": "complete",
+        "proper_time_to_explain": proper,
+        "model_called": gate.get("model_called"),
+        "mode": gate.get("mode"),
+        "confidence": gate.get("confidence"),
+        "decision_reason": gate.get("decision_reason"),
+    }
+
+    state["explanation"] = {
+        "needed": proper,
+        "status": "explain_now" if proper else "do_not_explain",
+        "decided_by": "gemma4_gate",
+        "decision_reason": gate.get("decision_reason"),
+        "passenger_facing_text": gate.get("passenger_facing_text"),
+    }
+
+    state["decision"] = {
+        "video_id": VIDEO_ID,
+        "segment_start_time_s": SEGMENT_START_TIME_S,
+        "workflow_stage": "gemma4_gate_decision",
+        "alpamayo_action": context.get("alpamayo_action"),
+        "scene_cause": context.get("scene_cause"),
+        "alpamayo_reasoning_trace": context.get("alpamayo_reasoning_trace"),
+        "uncertainty_score": context.get("uncertainty_score"),
+        "proper_time_to_explain": proper,
+        "explanation_needed": proper,
+        "decision_reason": gate.get("decision_reason"),
+        "display_plan": display_plan,
+    }
+
+    if proper:
+        state["current_stage"] = "gemma_gate_yes"
+        state["next_modules"]["semantic_segmentation"] = {"needed": True, "status": "pending"}
+        state["next_modules"]["depth_estimation"] = {"needed": True, "status": "pending"}
+        state["next_modules"]["mirage"] = {"needed": True, "status": "pending"}
+        state["next_modules"]["final_render"] = {"needed": True, "status": "pending"}
+    else:
+        state["current_stage"] = "gemma_gate_no"
+        state["next_modules"]["semantic_segmentation"] = {"needed": False, "status": "skipped_gemma_said_no"}
+        state["next_modules"]["depth_estimation"] = {"needed": False, "status": "skipped_gemma_said_no"}
+        state["next_modules"]["mirage"] = {"needed": False, "status": "skipped_gemma_said_no"}
+        state["next_modules"]["final_render"] = {"needed": False, "status": "skipped_gemma_said_no"}
+
+    write_json(STATE_JSON, state)
+
+
+def main():
+    make_dirs()
+    state = read_json(STATE_JSON)
+    frames = extract_key_frames()
+    prompt = build_prompt(state, frames)
+    write_json(GEMMA_PROMPT_JSON, prompt)
+
+    gate = run_gemma4_gate(state, frames)
+    if gate is None:
+        gate = dry_run_gate(state, prompt)
+    write_json(GEMMA_GATE_JSON, gate)
+    write_compat_gemma_json(gate)
+    update_state(state, gate)
+
+    print("\nStage 2: Gemma4 explanation timing gate")
+    print("=======================================")
+    print("mode:", gate["mode"])
+    print("model_called:", gate["model_called"])
+    print("proper_time_to_explain:", gate["proper_time_to_explain"])
+    print("decision:", gate["decision"])
+    print("decision_reason:", gate["decision_reason"])
+    print("display_target:", gate["display_target"])
+    print("passenger_facing_text:", gate["passenger_facing_text"])
+    print("confidence:", gate["confidence"])
+    print("\nGate JSON:", GEMMA_GATE_JSON)
+    print("Prompt JSON:", GEMMA_PROMPT_JSON)
+    print("Updated state:", STATE_JSON)
+
+
+if __name__ == "__main__":
+    main()
