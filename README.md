@@ -30,6 +30,7 @@ warranted, so the overlay appears only while it earns its place on screen.
 - [Configuration](#configuration)
 - [Outputs](#outputs)
 - [Known limitations](#known-limitations)
+- [Further documentation](#further-documentation)
 
 ---
 
@@ -317,6 +318,17 @@ state on each run.
   re-tune with `--calibrate` for other footage or the ribbon will sit wrong. In
   particular the ribbon's direction is only correct if `VANISH_U` / `HORIZON_V`
   really are the road's vanishing point for your camera.
+
+## Further documentation
+
+- **[docs/ENGINEERING.md](docs/ENGINEERING.md)** — the measured evidence behind
+  every geometry/tracking decision (with figures): why the ribbon is a straight
+  ground line, why the anchor coasts through dropouts, the visual-odometry sign
+  and look-ahead lessons, the jitter budget, and the measurement methods to
+  reuse. Read it before changing the renderer.
+- **[AGENTS.md](AGENTS.md)** — operating manual for coding agents (and new
+  contributors): environment facts, repo map, render commands, and the
+  invariants that must not be broken.
 
 ## Licence
 
