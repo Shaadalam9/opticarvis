@@ -30,7 +30,7 @@ user-facing description; **this file is for you, the agent working on the code.*
   `culane_res34.pth` (~865 MB, gdown id `1AjnvAD3qmqt_dGPveZJsLZ1bOyWv62Yj`);
   override via `OPTICARVIS_UFLD_REPO` / `OPTICARVIS_UFLD_WEIGHTS`. Its
   training-only imports (nvidia-dali, tensorboard) are stubbed in
-  `scene_models.load_lane_instance_model` — keep it that way.
+  `src/scene_models.py: load_lane_instance_model` — keep it that way.
 - Model weights (`*.pt`, `*.pth`) are **gitignored**; never commit them.
 - `ffmpeg` must be on PATH for the H.264 delivery encode (the render degrades to
   the mp4v master with a warning if missing).
@@ -39,18 +39,28 @@ user-facing description; **this file is for you, the agent working on the code.*
 - Renders are GPU-heavy (~10 min per 90 s clip): run them via Bash with
   `run_in_background`, never block on them.
 
+## Repo layout
+
+```
+src/        the AV visualisation pipeline (run scripts from here: `python src/<script>.py`,
+            which puts src/ on sys.path so the flat intra-pipeline imports resolve)
+docs/       README figures + ENGINEERING.md
+*.py (root) the separate mobility-study code (policy_demo, common, logmod, ...) - it
+            resolves `config`/`secret` next to itself, so it must stay at the root
+```
+
 ## Repo map
 
 | File | Role |
 |---|---|
-| `final_preview_renderer.py` | The renderer: ribbon geometry, lane-anchor tracking, VO blend, chevrons, compositing, both render loops |
-| `render_timeline_clip.py` | **The CLI entry point for renders** (derives output names, transcodes, records workflow state) |
-| `scene_models.py` | Lazy models: SegFormer road seg, Depth Anything V2, UFLDv2 lane instances, YOLOP (legacy) |
-| `ego_trajectory.py` | Future-frame visual odometry → per-frame future path JSON (the ONLY curvature source for real turns) |
-| `ego_motion.py` | Legacy phase-correlation pan track; feeds the disabled look-ahead only |
-| `gemma_gate_timeline.py` / `gemma_reasoning_module.py` | Sliding-window VLM gate → timeline JSON |
-| `alpamayo_stream.py` | Simulated per-timestep planner output feeding the gate |
-| `pipeline_common.py` | Paths, env-overridable clip selection, `transcode_h264`, `clip_stem` |
+| `src/final_preview_renderer.py` | The renderer: ribbon geometry, lane-anchor tracking, VO blend, chevrons, compositing, both render loops |
+| `src/render_timeline_clip.py` | **The CLI entry point for renders** (derives output names, transcodes, records workflow state) |
+| `src/scene_models.py` | Lazy models: SegFormer road seg, Depth Anything V2, UFLDv2 lane instances, YOLOP (legacy) |
+| `src/ego_trajectory.py` | Future-frame visual odometry → per-frame future path JSON (the ONLY curvature source for real turns) |
+| `src/ego_motion.py` | Legacy phase-correlation pan track; feeds the disabled look-ahead only |
+| `src/gemma_gate_timeline.py`, `src/gemma_reasoning_module.py` | Sliding-window VLM gate → timeline JSON |
+| `src/alpamayo_stream.py` | Simulated per-timestep planner output feeding the gate |
+| `src/pipeline_common.py` | Paths, env-overridable clip selection, `transcode_h264`, `clip_stem` |
 | `docs/ENGINEERING.md` | Measured evidence behind every geometry/tracking decision |
 
 Outputs land in `<PROJECT_ROOT>/workflow_outputs/final_renders/` — **outside the
@@ -61,14 +71,14 @@ repo**; videos are never committed. Filenames derive from the rendered clip
 
 ```bash
 # gate timeline (slow, VLM per window)
-python gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
+python src/gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
 
 # standard render (lane centering + curve fit, no VO)
-python render_timeline_clip.py <clip.mp4> gate_timeline.json <tag>
+python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag>
 
 # with turn following: build the VO track, then enable it
-python ego_trajectory.py <clip.mp4> vo_traj.json
-OPTICARVIS_VO_TRAJECTORY=1 python render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
+python src/ego_trajectory.py <clip.mp4> vo_traj.json
+OPTICARVIS_VO_TRAJECTORY=1 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
 ```
 
 `""` skips an optional argv slot. Supplying a track without its env flag warns

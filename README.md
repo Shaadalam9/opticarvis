@@ -109,9 +109,9 @@ monocular depth aligned to the road plane.
 
 ```mermaid
 flowchart TD
-    A[Dashcam clip] --> B[alpamayo_stream.py<br/>per-timestep planner output]
-    B --> C[gemma_gate_timeline.py<br/>VLM: explain, or stay clean?]
-    A --> D[ego_trajectory.py<br/>future-frame visual odometry<br/>optional, for turns]
+    A[Dashcam clip] --> B[src/alpamayo_stream.py<br/>per-timestep planner output]
+    B --> C[src/gemma_gate_timeline.py<br/>VLM: explain, or stay clean?]
+    A --> D[src/ego_trajectory.py<br/>future-frame visual odometry<br/>optional, for turns]
     A --> E[final_preview_renderer.py]
     C -->|gate timeline| E
     D -->|future path| E
@@ -236,23 +236,23 @@ and keeps the ribbon straight ahead in the lane.
 **Build the explanation-gate timeline**
 
 ```bash
-python gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
+python src/gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
 ```
 
 **Render** — the tag becomes part of the output filename:
 
 ```bash
-python render_timeline_clip.py <clip.mp4> gate_timeline.json lanecenter
+python src/render_timeline_clip.py <clip.mp4> gate_timeline.json lanecenter
 ```
 
 **Render with turn following** — reconstruct the path first, then enable it:
 
 ```bash
-python ego_trajectory.py <clip.mp4> vo_traj.json 4.0
+python src/ego_trajectory.py <clip.mp4> vo_traj.json 4.0
 ```
 
 ```bash
-OPTICARVIS_VO_TRAJECTORY=1 python render_timeline_clip.py <clip.mp4> gate_timeline.json hybrid "" vo_traj.json
+OPTICARVIS_VO_TRAJECTORY=1 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json hybrid "" vo_traj.json
 ```
 
 Pass `""` to skip an optional argument slot. Supplying a track file while its flag is
@@ -261,7 +261,7 @@ unset is ignored **with a warning**, rather than silently.
 **Tune the camera calibration** on a single still, with no video or models loaded:
 
 ```bash
-python final_preview_renderer.py --calibrate frame.jpg calib.png
+python src/final_preview_renderer.py --calibrate frame.jpg calib.png
 ```
 
 This draws the horizon, the vanishing point and metre distance ticks so `HORIZON_V`,

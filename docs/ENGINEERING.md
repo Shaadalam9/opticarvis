@@ -1,8 +1,8 @@
 # Engineering notes — the measured decisions behind the ribbon
 
 This file records *why* the renderer is built the way it is, with the measurements
-that forced each decision. Read it before changing `final_preview_renderer.py`
-geometry or tracking, or `ego_trajectory.py`. Every rule here was paid for with a
+that forced each decision. Read it before changing `src/final_preview_renderer.py`
+geometry or tracking, or `src/ego_trajectory.py`. Every rule here was paid for with a
 shipped defect; the figures are the evidence.
 
 The user-facing summary of these rules is the
@@ -27,7 +27,7 @@ in `perspective_profile()`.
 **The bug this replaced** *(c)*: interpolating near→far with a smoothstep and
 collapsing onto the vanishing column **at the ribbon's far end** (rather than at
 the horizon). The ribbon stops well short of the horizon, so its far end must
-retain ~32 % of the near-end offset; forcing it to zero early pulled the far end
+retain ~41 % of the near-end offset; forcing it to zero early pulled the far end
 ~31 px toward the image centre and the smoothstep bowed the middle ~15 px — on a
 multi-lane road the ribbon visibly drifted into the neighbouring lane.
 
@@ -67,7 +67,7 @@ state removes that.
 
 ### 3a. The lateral sign convention
 
-`ego_trajectory.py` integrates the path in the standard vehicle frame
+`src/ego_trajectory.py` integrates the path in the standard vehicle frame
 (+yaw/+Y = **left**); the renderer's `project_ground_point` is
 **right-positive** (`LATERAL_SIGN = +1`). `future_trajectories` negates lateral
 on output and stamps `"lateral_convention": "right_positive"` into the track.
@@ -129,7 +129,7 @@ re-examine the metric before the footage.
 
 ## 4. Gentle curves: the lane-curve fit
 
-![Prototype: fits are straight on straight roads, fall back where paint vanishes](images/lane_curve_prototype.jpg)
+![Lane-curve fit: near-infinite radius on straights, decays to straight where paint stops](images/lane_curve_behaviour.jpg)
 
 `fit_lane_curve` unprojects the two straddling boundary polylines to the road
 plane and fits a distance-weighted robust quadratic to their midline; the tracked

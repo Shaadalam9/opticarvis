@@ -233,3 +233,4 @@ videos
 # YOLO26/YOLO11 segmentation checkpoints, UFLDv2 lane weights.
 *.pt
 *.pth
+.DS_Store
