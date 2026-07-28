@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 PROJECT_ROOT = "C:/Users/localadmin/Desktop/Shadab"
-OPTICARVIS_ROOT = PROJECT_ROOT + "/opticarvis"
+OPTICARVIS_ROOT = PROJECT_ROOT + "/opticarvis/src"
 VIDEO_ID = "TuCsyBF3nHU"
 SEGMENT_START_TIME_S = 4630.0
 STATE_JSON = PROJECT_ROOT + "/workflow_outputs/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_workflow_state.json"
