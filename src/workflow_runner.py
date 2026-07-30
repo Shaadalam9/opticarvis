@@ -13,17 +13,17 @@ from pipeline_common import (
     PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
+    CLIP_LENGTH_S,
+    ALPAMAYO_JSON,
+    STATE_JSON,
+    current_job_summary,
     read_json,
     write_json,
     clamp,
 )
 
-CLIP_LENGTH_S = 30.0
-
-ALPAMAYO_JSON = PROJECT_ROOT + "/alpamayo_outputs/alpamayo_inference_output_TuCsyBF3nHU.json"
 OUTPUT_ROOT = PROJECT_ROOT + "/workflow_outputs"
 ALPAMAYO_CONTEXT_JSON = OUTPUT_ROOT + "/alpamayo_traces/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_alpamayo_context.json"
-STATE_JSON = OUTPUT_ROOT + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_workflow_state.json"
 
 OUTPUT_DIRS = [
     OUTPUT_ROOT,
@@ -222,6 +222,7 @@ def build_state(payload):
         "video_id": VIDEO_ID,
         "segment_start_time_s": SEGMENT_START_TIME_S,
         "clip_length_s": CLIP_LENGTH_S,
+        "job": current_job_summary(),
         "workflow_stage": "alpamayo_context_extraction",
         "alpamayo_action": action,
         "scene_cause": scene_cause,
@@ -243,9 +244,10 @@ def build_state(payload):
         "video_id": VIDEO_ID,
         "segment_start_time_s": SEGMENT_START_TIME_S,
         "clip_length_s": CLIP_LENGTH_S,
+        "job": current_job_summary(),
         "current_stage": "alpamayo_context_extraction_complete",
         "pipeline_version": "alpamayo_context_then_gemma_gate_v2",
-        "inputs": {"alpamayo_json": ALPAMAYO_JSON},
+        "inputs": current_job_summary(),
         "outputs": {
             "alpamayo_context_json": ALPAMAYO_CONTEXT_JSON,
             "state_json": STATE_JSON,
@@ -276,7 +278,7 @@ def build_state(payload):
 
 def main():
     make_dirs()
-    payload = read_json(ALPAMAYO_JSON)
+    payload = read_json(ALPAMAYO_JSON, "Alpamayo JSON")
     context, state = build_state(payload)
     write_json(ALPAMAYO_CONTEXT_JSON, context)
     write_json(STATE_JSON, state)

@@ -1,4 +1,8 @@
-r"""Run the corrected Alpamayo to Gemma4 gate pipeline.
+r"""Run one OptiCarVis clip job.
+
+This is the single-job entry point. It is job aware through pipeline_common.py.
+The batch runner calls this file repeatedly with environment variables for each
+city/video/start-time job.
 
 Order:
 1. Alpamayo context extraction.
@@ -12,39 +16,71 @@ import os
 import subprocess
 import sys
 
-PROJECT_ROOT = "C:/Users/localadmin/Desktop/Shadab"
-OPTICARVIS_ROOT = PROJECT_ROOT + "/opticarvis/src"
-VIDEO_ID = "TuCsyBF3nHU"
-SEGMENT_START_TIME_S = 4630.0
-STATE_JSON = PROJECT_ROOT + "/workflow_outputs/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_workflow_state.json"
+from pipeline_common import (
+    STATE_JSON,
+    VIDEO_ID,
+    SEGMENT_START_TIME_S,
+    CLIP_LENGTH_S,
+    JOB_ID,
+    LOCALITY,
+    COUNTRY,
+    CONTINENT,
+)
+
+
+OPTICARVIS_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
 def run_step(script_name):
     script_path = OPTICARVIS_ROOT + "/" + script_name
+
     if not os.path.isfile(script_path):
         print("Missing script:", script_path)
         raise SystemExit(1)
 
-    print("\n" + "=" * 70)
+    print("")
+    print("=" * 70)
     print("Running:", script_name)
     print("=" * 70)
-    subprocess.run([sys.executable, script_path], cwd=OPTICARVIS_ROOT, check=True)
+
+    subprocess.run(
+        [sys.executable, script_path],
+        cwd=OPTICARVIS_ROOT,
+        check=True,
+    )
 
 
 def load_state():
     if not os.path.isfile(STATE_JSON):
         print("Missing workflow state:", STATE_JSON)
         raise SystemExit(1)
+
     with open(STATE_JSON, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def main():
-    print("\nCorrected OptiCarVis workflow")
+def print_job_header():
+    print("")
+    print("Corrected OptiCarVis workflow")
     print("=============================")
+    print("job_id:", JOB_ID)
+    print("video_id:", VIDEO_ID)
+    print("segment_start_time_s:", SEGMENT_START_TIME_S)
+    print("clip_length_s:", CLIP_LENGTH_S)
+
+    if LOCALITY or COUNTRY or CONTINENT:
+        print("city:", LOCALITY)
+        print("country:", COUNTRY)
+        print("continent:", CONTINENT)
+
+    print("")
     print("Alpamayo provides context.")
     print("Gemma4 decides whether this is a proper time to explain.")
     print("MIRAGE runs only if Gemma4 says yes.")
+
+
+def main():
+    print_job_header()
 
     run_step("workflow_runner.py")
     run_step("gemma_reasoning_module.py")
@@ -54,12 +90,14 @@ def main():
     explanation_needed = bool(explanation.get("needed", False))
 
     if not explanation_needed:
-        print("\nGemma4 gate said NO.")
+        print("")
+        print("Gemma4 gate said NO.")
         print("No segmentation, depth, MIRAGE or rendering will run.")
         print("Reason:", explanation.get("decision_reason", ""))
         return
 
-    print("\nGemma4 gate said YES.")
+    print("")
+    print("Gemma4 gate said YES.")
     print("Continuing to visual grounding and MIRAGE display.")
 
     run_step("semantic_segmentation_module.py")
@@ -70,10 +108,14 @@ def main():
     state = load_state()
     outputs = state.get("outputs", {})
 
-    print("\nPipeline complete.")
+    print("")
+    print("Pipeline complete.")
     print("State JSON:", STATE_JSON)
+
     if outputs.get("clean_final_preview_video"):
         print("Final video:", outputs.get("clean_final_preview_video"))
+    elif outputs.get("roadline_v3_final_preview_video"):
+        print("Final video:", outputs.get("roadline_v3_final_preview_video"))
     elif outputs.get("final_preview_video"):
         print("Final video:", outputs.get("final_preview_video"))
 
