@@ -71,9 +71,14 @@ def safe_slug(value):
 
 
 def parse_number(value, default=None):
-    text = str(value or "").strip()
+    if value is None:
+        return default
+
+    text = str(value).strip()
+
     if not text:
         return default
+
     try:
         return float(text)
     except ValueError:
