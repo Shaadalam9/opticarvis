@@ -32,6 +32,7 @@ from pipeline_common import (
     SEGMENT_START_TIME_S,
     CLIP_VIDEO,
     STATE_JSON,
+    YOLO_SEG_MODEL,
     read_json,
     write_json,
     ensure_dir,
@@ -48,7 +49,8 @@ OUTPUT_PREVIEW_DIR = workflow_path(
     segment_tag() + "_preview_frames",
 )
 
-MODEL_NAME = "yolo26x-seg.pt"
+# Swap via OPTICARVIS_YOLO_SEG_MODEL; see pipeline_common "Models".
+MODEL_NAME = YOLO_SEG_MODEL
 IMAGE_SIZE = 1280
 CONFIDENCE_THRESHOLD = 0.25
 

@@ -21,20 +21,23 @@ import os
 import cv2
 import numpy as np
 
-from pipeline_common import UFLDV2_DIR, normalise_path
+from pipeline_common import (
+    DEPTH_MODEL,
+    ROAD_SEG_MODEL,
+    UFLDV2_DIR,
+    normalise_path,
+)
 
 
-ROAD_SEG_MODEL = "nvidia/segformer-b0-finetuned-cityscapes-1024-1024"
 # Cityscapes label ids that count as drivable / walkable ground for the ribbon.
 # 0 = road (includes painted crosswalks). Sidewalk (1) is intentionally excluded.
+# Retune these if ROAD_SEG_MODEL is swapped for one with a different label map.
 ROAD_LABEL_IDS = (0,)
-
-DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Small-hf"
 
 # YOLOP lane-line head. Input is 640x384 RGB; ll_seg is a 2-class (bg / lane)
 # segmentation upsampled back to the frame.
-LANE_MODEL_REPO = "hustvl/yolop"
-LANE_MODEL_NAME = "yolop"
+LANE_MODEL_REPO = os.environ.get("OPTICARVIS_LANE_MODEL_REPO", "hustvl/yolop")
+LANE_MODEL_NAME = os.environ.get("OPTICARVIS_LANE_MODEL_NAME", "yolop")
 LANE_INPUT_W = 640
 LANE_INPUT_H = 384
 

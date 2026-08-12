@@ -46,6 +46,7 @@ from pipeline_common import (
     SEGMENT_START_TIME_S,
     CLIP_VIDEO,
     STATE_JSON,
+    YOLO_SEG_MODEL,
     read_json,
     write_json,
     clamp,
@@ -80,8 +81,9 @@ OUTPUT_VIDEO_VEHICLES = workflow_path(
     segment_tag() + "_mirage_preview_" + RENDER_VARIANT + "_vehicles.mp4",
 )
 
-MODEL_NAME = "yolo26x-seg.pt"
-TRACKER_NAME = "bytetrack.yaml"
+# Swap via OPTICARVIS_YOLO_SEG_MODEL; see pipeline_common "Models".
+MODEL_NAME = YOLO_SEG_MODEL
+TRACKER_NAME = os.environ.get("OPTICARVIS_TRACKER", "bytetrack.yaml")
 IMAGE_SIZE = 1280
 # Low gate: the source is 720p, so most missed pedestrians are small/occluded
 # people the detector sees but scores low, not a resolution problem. 0.15 caught

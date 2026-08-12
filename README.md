@@ -164,14 +164,62 @@ chosen trade — never confidently point somewhere the vehicle is not going.
 
 ## Models used
 
-| Purpose | Model | Notes |
+Every checkpoint is named in one place — the **Models** block of
+`src/pipeline_common.py` — and every one is environment-overridable, so swapping a
+model never means editing the module that loads it.
+
+| Purpose | Default model | Override |
 |---|---|---|
-| Detection + segmentation | `yolo26x-seg` | Auto-downloaded on first run |
-| Tracking | ByteTrack | Stable IDs across frames |
-| Road surface | `nvidia/segformer-b0-finetuned-cityscapes-1024-1024` | Clips the ribbon to drivable road |
-| Monocular depth | `depth-anything/Depth-Anything-V2-Small-hf` | Relative depth, road-plane aligned to metres |
-| Lane instances | UFLDv2 (CULane, ResNet-34) | **Manual setup — see [below](#optional-lane-detection-ufldv2)** |
-| Explanation gate | `google/gemma-4-E2B-it` | E2B fits a 16 GB GPU; override with `OPTICARVIS_GEMMA4_MODEL` |
+| Detection + segmentation | `yolo26x-seg.pt` (auto-downloaded) | `OPTICARVIS_YOLO_SEG_MODEL` |
+| Tracking | ByteTrack | `OPTICARVIS_TRACKER` |
+| Road surface | `nvidia/segformer-b0-finetuned-cityscapes-1024-1024` | `OPTICARVIS_ROAD_SEG_MODEL` |
+| Monocular depth | `depth-anything/Depth-Anything-V2-Small-hf` | `OPTICARVIS_DEPTH_MODEL` |
+| Lane instances | UFLDv2 (CULane, ResNet-34) | `OPTICARVIS_UFLD_REPO` / `_WEIGHTS` — **[setup](#external-repositories)** |
+| Explanation gate | `google/gemma-4-E2B-it` | `OPTICARVIS_GEMMA4_MODEL` |
+| Planner | whatever `external/oom-free-alpamayo` runs | `OPTICARVIS_ALPAMAYO_MODEL` — **[see below](#swapping-the-planner-model)** |
+
+Hugging Face weights are loaded with `local_files_only=True` so a long batch is
+never stalled by Hub metadata calls. On a machine that has not cached them yet, set
+`OPTICARVIS_HF_LOCAL_FILES_ONLY=0` for the first run.
+
+Swapping `OPTICARVIS_ROAD_SEG_MODEL` for a checkpoint trained on a different label
+map also means retuning `ROAD_LABEL_IDS` in `src/scene_models.py` — the default
+`(0,)` is the Cityscapes road class.
+
+### Swapping the planner model
+
+The planner is not imported; it runs as a subprocess, so its checkpoint, CLI and
+Python environment are each swappable without touching this repo. That matters
+because a larger planner generally needs its own torch/transformers, which will not
+be the environment the rest of the pipeline runs in.
+
+| Variable | Effect |
+|---|---|
+| `OPTICARVIS_ALPAMAYO_PYTHON` | Interpreter for the planner subprocess. Defaults to the current one — set it to the planner venv's python |
+| `OPTICARVIS_ALPAMAYO_MODEL` | Passed through as `--model <id>`. Only passed when set, since a backend that does not accept the flag would reject it |
+| `OPTICARVIS_ALPAMAYO_SCRIPT` | The script to run. Defaults to `<repo>/scripts/infer_crowd_clip.py` |
+| `OPTICARVIS_ALPAMAYO_CONFIG` | Backend config file (default `config_5080_16gb.json`) |
+| `OPTICARVIS_ALPAMAYO_EXTRA_ARGS` | Extra CLI arguments, split shell-style and appended verbatim |
+
+For example, pointing at [`nvidia/Alpamayo2-Super`](https://huggingface.co/nvidia/Alpamayo2-Super)
+running from its own environment:
+
+```bash
+export OPTICARVIS_ALPAMAYO_PYTHON=/opt/alpamayo2/.venv/bin/python
+export OPTICARVIS_ALPAMAYO_REPO=/opt/alpamayo2
+export OPTICARVIS_ALPAMAYO_SCRIPT=/opt/alpamayo2/scripts/infer.py
+export OPTICARVIS_ALPAMAYO_MODEL=nvidia/Alpamayo2-Super
+export OPTICARVIS_ALPAMAYO_EXTRA_ARGS="--dtype bf16 --diffusion-steps 10"
+```
+
+The interpreter path is passed through verbatim, so a POSIX path works when the
+batch runner itself is driven from Windows.
+
+> **Note** — the wrapper controls *how* the planner is invoked, not what its CLI
+> accepts. A backend whose flags differ from `--clips / --output-dir / --config`
+> needs its own wrapper script; point `OPTICARVIS_ALPAMAYO_SCRIPT` at that. Check
+> the backend's own hardware requirements before committing to it: Alpamayo2-Super
+> is 34B and was profiled at ~72 GiB peak device memory on an H100 80 GB.
 
 ## Requirements
 
@@ -324,9 +372,11 @@ needs no code edits.
 | `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
 | `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns |
 | `OPTICARVIS_EGO_LOOKAHEAD` | `0` | Legacy phase-correlation look-ahead; superseded by VO |
-| `OPTICARVIS_GEMMA4_MODEL` | `google/gemma-4-E2B-it` | Explanation-gate model |
 | `OPTICARVIS_UFLD_REPO` / `_WEIGHTS` | local paths | UFLDv2 checkout and checkpoint |
 | `OPTICARVIS_GATE_REASONING` | — | Override the planner reasoning trace (testing) |
+
+Model selection is listed separately under [Models](#models-used); the planner
+backend under [Swapping the planner model](#swapping-the-planner-model).
 
 ## Outputs
 

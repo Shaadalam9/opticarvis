@@ -18,6 +18,8 @@ from pipeline_common import (
     SEGMENT_START_TIME_S,
     CLIP_VIDEO,
     STATE_JSON,
+    GEMMA4_MODEL,
+    HF_LOCAL_FILES_ONLY,
     read_json,
     write_json,
     ensure_dir,
@@ -39,7 +41,7 @@ GEMMA_MODEL_ID = "Gemma4_gate_placeholder"
 # model is unavailable or its output cannot be parsed. Override the checkpoint
 # with OPTICARVIS_GEMMA4_MODEL (e.g. google/gemma-4-E2B-it for a faster gate).
 USE_REAL_GEMMA = True
-GEMMA4_MODEL_ID = os.environ.get("OPTICARVIS_GEMMA4_MODEL", "google/gemma-4-E2B-it")
+GEMMA4_MODEL_ID = GEMMA4_MODEL
 GEMMA4_MAX_NEW_TOKENS = 320
 
 
@@ -195,15 +197,19 @@ def load_gemma4():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         # local_files_only avoids slow/hanging Hub metadata calls; the weights
         # are expected to be cached already (download once with huggingface-cli).
+        # A machine that has not cached them needs
+        # OPTICARVIS_HF_LOCAL_FILES_ONLY=0 for the first run.
         processor = AutoProcessor.from_pretrained(
-            GEMMA4_MODEL_ID, padding_side="left", local_files_only=True
+            GEMMA4_MODEL_ID,
+            padding_side="left",
+            local_files_only=HF_LOCAL_FILES_ONLY,
         )
         model = AutoModelForImageTextToText.from_pretrained(
             GEMMA4_MODEL_ID,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
             attn_implementation="sdpa",
-            local_files_only=True,
+            local_files_only=HF_LOCAL_FILES_ONLY,
         ).to(device).eval()
         _gemma_model = (processor, model)
     return _gemma_model

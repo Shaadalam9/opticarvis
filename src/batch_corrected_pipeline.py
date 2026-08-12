@@ -54,8 +54,11 @@ from pipeline_common import (
     WORKFLOW_OUTPUTS,
     ALPAMAYO_OUTPUTS,
     ALPAMAYO_JSON_DIR,
+    ALPAMAYO_MODEL,
     OOM_FREE_ALPAMAYO_REPO,
     VIDEOS_DIR,
+    alpamayo_extra_args,
+    alpamayo_python,
     ensure_dir,
     append_jsonl,
     ffmpeg_path,
@@ -553,7 +556,7 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
     print("output_dir:", ALPAMAYO_JSON_DIR)
 
     command = [
-        sys.executable,
+        alpamayo_python(),
         ALPAMAYO_SCRIPT,
         "--clips",
         manifest_path,
@@ -562,6 +565,18 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
         "--config",
         ALPAMAYO_CONFIG,
     ]
+
+    # Only passed when set, since a backend that does not accept --model would
+    # reject the flag outright.
+    if ALPAMAYO_MODEL:
+        command += ["--model", ALPAMAYO_MODEL]
+
+    command += alpamayo_extra_args()
+
+    print("interpreter:", command[0])
+
+    if ALPAMAYO_MODEL:
+        print("model:", ALPAMAYO_MODEL)
 
     completed = subprocess.run(command, cwd=OOM_ALPAMAYO_REPO)
 

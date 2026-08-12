@@ -39,8 +39,10 @@ OPTICARVIS_UFLDV2_DIR
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 
 
 def normalise_path(path):
@@ -123,6 +125,79 @@ MAPPING_CSV = normalise_path(
 SOURCE_VIDEO = normalise_path(
     os.environ.get("OPTICARVIS_SOURCE_VIDEO", VIDEOS_DIR + "/" + VIDEO_ID + ".mp4")
 )
+
+
+# ---------------------------------------------------------------------------
+# Models
+#
+# Every checkpoint the pipeline loads is named here so a model can be swapped
+# without editing the module that happens to load it. Values are Hugging Face
+# ids (or a local directory) except YOLO_SEG_MODEL, which ultralytics resolves
+# as a weights filename and downloads on first use.
+# ---------------------------------------------------------------------------
+
+YOLO_SEG_MODEL = os.environ.get("OPTICARVIS_YOLO_SEG_MODEL", "yolo26x-seg.pt")
+
+ROAD_SEG_MODEL = os.environ.get(
+    "OPTICARVIS_ROAD_SEG_MODEL",
+    "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
+)
+
+DEPTH_MODEL = os.environ.get(
+    "OPTICARVIS_DEPTH_MODEL",
+    "depth-anything/Depth-Anything-V2-Small-hf",
+)
+
+GEMMA4_MODEL = os.environ.get("OPTICARVIS_GEMMA4_MODEL", "google/gemma-4-E2B-it")
+
+# The Hub is consulted only when this is off. It defaults to on because a
+# metadata call per load stalls long batches, but a machine that has not
+# downloaded the weights yet needs OPTICARVIS_HF_LOCAL_FILES_ONLY=0 for the
+# first run.
+HF_LOCAL_FILES_ONLY = os.environ.get("OPTICARVIS_HF_LOCAL_FILES_ONLY", "1") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Alpamayo backend
+#
+# The planner runs as a subprocess so its checkpoint, CLI and Python
+# environment are all swappable without touching this repo. A larger model
+# (for example nvidia/Alpamayo2-Super) generally needs its own interpreter with
+# its own torch/transformers, which is what ALPAMAYO_PYTHON selects.
+# ---------------------------------------------------------------------------
+
+ALPAMAYO_PYTHON = os.environ.get("OPTICARVIS_ALPAMAYO_PYTHON", "")
+
+ALPAMAYO_MODEL = os.environ.get("OPTICARVIS_ALPAMAYO_MODEL", "")
+
+ALPAMAYO_EXTRA_ARGS = os.environ.get("OPTICARVIS_ALPAMAYO_EXTRA_ARGS", "")
+
+
+def alpamayo_python():
+    """Interpreter for the Alpamayo subprocess, defaulting to the current one."""
+    return ALPAMAYO_PYTHON or sys.executable
+
+
+def alpamayo_extra_args():
+    """Extra CLI arguments for the Alpamayo backend, parsed shell style."""
+    if not ALPAMAYO_EXTRA_ARGS:
+        return []
+
+    return shlex.split(ALPAMAYO_EXTRA_ARGS)
+
+
+def model_summary():
+    """Every model the pipeline would load, for logging and workflow state."""
+    return {
+        "yolo_seg_model": YOLO_SEG_MODEL,
+        "road_seg_model": ROAD_SEG_MODEL,
+        "depth_model": DEPTH_MODEL,
+        "gemma4_model": GEMMA4_MODEL,
+        "hf_local_files_only": HF_LOCAL_FILES_ONLY,
+        "alpamayo_python": alpamayo_python(),
+        "alpamayo_model": ALPAMAYO_MODEL,
+        "alpamayo_extra_args": alpamayo_extra_args(),
+    }
 
 
 def clip_length_tag():

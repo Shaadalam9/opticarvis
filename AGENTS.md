@@ -38,6 +38,14 @@ user-facing description; **this file is for you, the agent working on the code.*
   the mp4v master with a warning if missing).
 - The Gemma gate model is `google/gemma-4-E2B-it` — **E2B, not E4B**: E4B does
   not fit the 16 GB GPU.
+- **Every model id lives in the `Models` block of `src/pipeline_common.py`** and
+  is env-overridable. Do not hardcode a checkpoint in the module that loads it;
+  add it there instead. The planner is a *subprocess*, so its interpreter
+  (`OPTICARVIS_ALPAMAYO_PYTHON`), checkpoint (`OPTICARVIS_ALPAMAYO_MODEL`) and
+  flags (`OPTICARVIS_ALPAMAYO_EXTRA_ARGS`) are swappable without touching this
+  repo — a bigger planner needs its own torch, so it will not share this venv.
+  `ALPAMAYO_PYTHON` is deliberately **not** run through `normalise_path`: it may
+  be a POSIX path while the runner is on Windows.
 - Renders are GPU-heavy (~10 min per 90 s clip): run them via Bash with
   `run_in_background`, never block on them.
 
