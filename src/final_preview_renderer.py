@@ -173,6 +173,29 @@ CAM_HEIGHT_M = 1.30
 LATERAL_SIGN = 1.0
 MIN_FORWARD_M = 0.5
 
+# Pixel thresholds that used to be bare literals inside the geometry functions.
+# They are named here so apply_resolution_scaling() can reach them: each one is
+# an absolute pixel quantity at the reference resolution, and leaving any of
+# them unscaled silently changes the geometry rather than raising.
+DEPTH_HORIZON_EXCLUDE_PX = 30.0   # to_ground: rows nearer the horizon than this are
+                                 # dropped, which sets the MAX metric depth of the fit
+FIT_DEPTH_HORIZON_EXCLUDE_PX = 8.0  # same idea for the road-plane depth fit
+LANE_STRADDLE_GUARD_PX = 4.0      # dead zone each side of centre when pairing boundaries
+LANE_WIDTH_FLOOR_PX = 40.0        # absolute floor on an accepted lane width
+LANE_WIDTH_CEIL_PX = 560.0        # absolute ceiling on an accepted lane width
+LANE_WIDTH_CONVERGE_PX = 28.0     # per-row width-change tolerance (absorbs detection noise)
+LANE_ROW_TOL_PX = 3.0             # tolerance when a pick row sits just outside a polyline
+AIM_CENTRAL_WINDOW_PX = 160.0     # half-width of the central column sampled for the aim
+CHEVRON_TANGENT_LOOKBACK_PX = 6.0  # rows back along the centreline used for the tangent
+LABEL_TOP_CLAMP_PX = 18.0         # keep a distance label inside the top edge
+LABEL_ABOVE_BOX_PX = 8.0          # label offset above its box
+RAIL_STROKE_PX = 2                # ribbon rail stroke width
+
+# Area-like thresholds: these count PIXELS inside a region whose height and
+# width both grow with s, so they scale by s squared, not s.
+AIM_MIN_MASK_PX = 40              # minimum road-mask pixels for a usable aim
+FIT_DEPTH_MIN_ROAD_PX = 200       # minimum road pixels before fitting depth to metric
+
 RIBBON_HALF_M = 0.60        # half-width in metres (a slim guidance path)
 PATH_START_M = 8.0
 PATH_END_M = 32.0
@@ -390,6 +413,109 @@ def apply_calibration_overrides():
         if key in data:
             module_globals[key] = data[key]
     print("Loaded camera calibration:", CALIBRATION_JSON)
+
+
+# Names scaled by s (linear pixels) and by s squared (pixel counts) when the
+# frame differs from the calibration reference. Anything metric (metres),
+# dimensionless (ratios, alphas, EMA weights, trust fractions), temporal
+# (frames, seconds) or a model input size (IMAGE_SIZE) is deliberately absent.
+RESOLUTION_SCALED_PX = (
+    "HORIZON_V", "VANISH_U", "CAM_FOCAL_PX",
+    "RIBBON_NEAR_ROWS", "RIBBON_FAR_ROWS", "RIBBON_AIM_CAP_PX",
+    "EGO_LOOKAHEAD_CAP_PX", "LOOKAHEAD_DEADBAND_PX", "VO_MAX_STEP_PX",
+    "LANE_CENTER_CAP_PX", "LANE_TRACK_VMAX", "LANE_TRACK_GATE_PX",
+    "LANE_RELAX_RATE_PX", "LANE_SCAN_BOTTOM_MARGIN_PX", "LANE_DILATE_PX",
+    "LANE_EXTRAPOLATE_TOL_PX", "LANE_CURVE_PICK_ROW",
+    "HORIZON_CLIP_MARGIN_PX", "BODY_BLUR",
+    "FADE_IN_PX", "FADE_OUT_PX", "ANIM_REVEAL_SOFT_PX",
+    "CONTACT_SHADOW_OFFSET_PX", "CONTACT_SHADOW_BLUR",
+    "OCCLUSION_FEATHER_PX", "ROAD_MASK_FEATHER_PX",
+    "HIGHLIGHT_FEATHER_PX", "CONTOUR_THICKNESS",
+    "DEPTH_HORIZON_EXCLUDE_PX", "FIT_DEPTH_HORIZON_EXCLUDE_PX",
+    "LANE_STRADDLE_GUARD_PX", "LANE_WIDTH_FLOOR_PX", "LANE_WIDTH_CEIL_PX",
+    "LANE_WIDTH_CONVERGE_PX", "LANE_ROW_TOL_PX", "AIM_CENTRAL_WINDOW_PX",
+    "CHEVRON_TANGENT_LOOKBACK_PX", "LABEL_TOP_CLAMP_PX", "LABEL_ABOVE_BOX_PX",
+    "RAIL_STROKE_PX",
+)
+
+RESOLUTION_SCALED_AREA = ("AIM_MIN_MASK_PX", "FIT_DEPTH_MIN_ROAD_PX")
+
+# Set once per process so a second entry point cannot double-scale the globals.
+_RESOLUTION_SCALE_APPLIED = None
+
+# Kernel sizes must stay odd positive ints for cv2's Gaussian blur.
+RESOLUTION_ODD_KERNELS = (
+    "BODY_BLUR", "CONTACT_SHADOW_BLUR", "OCCLUSION_FEATHER_PX",
+    "ROAD_MASK_FEATHER_PX", "HIGHLIGHT_FEATHER_PX",
+)
+
+RESOLUTION_INT_NAMES = RESOLUTION_ODD_KERNELS + (
+    "CONTOUR_THICKNESS", "RAIL_STROKE_PX", "LANE_SCAN_BOTTOM_MARGIN_PX", "LANE_DILATE_PX",
+    "CONTACT_SHADOW_OFFSET_PX",
+) + RESOLUTION_SCALED_AREA
+
+
+def apply_resolution_scaling(width, height):
+    """Rescale the pixel-space scalars from the calibration reference to a frame.
+
+    The calibration is absolute pixels at CALIB_REF_WIDTH x CALIB_REF_HEIGHT.
+    Most clips in this project are 3840x2160, and rendering those with
+    reference-resolution scalars puts the horizon, the vanishing point and every
+    row offset at a third of where they belong. render_video used to only warn.
+
+    Scaling HORIZON_V, VANISH_U and CAM_FOCAL_PX by the same s leaves the
+    projection self-consistent: u and v both scale by s, and the inverse
+    d = f*H/(v - HORIZON_V) is unchanged, so metric distances are preserved.
+
+    Returns the applied scale. An exact no-op at the reference resolution --
+    the equality check returns before any global is touched, so clips already
+    at 1280x720 render bit-identically to before this function existed.
+    """
+    global _RESOLUTION_SCALE_APPLIED
+
+    if _RESOLUTION_SCALE_APPLIED is not None:
+        return _RESOLUTION_SCALE_APPLIED
+
+    if (width, height) == (CALIB_REF_WIDTH, CALIB_REF_HEIGHT):
+        _RESOLUTION_SCALE_APPLIED = 1.0
+        return 1.0
+
+    scale_x = float(width) / float(CALIB_REF_WIDTH)
+    scale_y = float(height) / float(CALIB_REF_HEIGHT)
+
+    if abs(scale_x - scale_y) > 0.01:
+        print(
+            "WARNING: %dx%d has a different aspect ratio to the %dx%d calibration"
+            % (width, height, CALIB_REF_WIDTH, CALIB_REF_HEIGHT)
+        )
+        print("         a single pinhole scale cannot fix that; re-tune with --calibrate.")
+
+    scope = globals()
+
+    for name in RESOLUTION_SCALED_PX:
+        value = scope[name]
+        scope[name] = tuple(v * scale_x for v in value) if isinstance(value, tuple) else value * scale_x
+
+    for name in RESOLUTION_SCALED_AREA:
+        scope[name] = scope[name] * scale_x * scale_x
+
+    # RIBBON_AIM_BAND is a tuple of horizon-relative rows.
+    RIBBON_AIM_BAND_scaled = tuple(v * scale_x for v in scope["RIBBON_AIM_BAND"])
+    scope["RIBBON_AIM_BAND"] = RIBBON_AIM_BAND_scaled
+
+    for name in RESOLUTION_INT_NAMES:
+        value = int(round(scope[name]))
+
+        if name in RESOLUTION_ODD_KERNELS:
+            value = max(1, value | 1)
+
+        scope[name] = value
+
+    print("Scaled camera calibration by %.3f for %dx%d" % (scale_x, width, height))
+
+    _RESOLUTION_SCALE_APPLIED = scale_x
+
+    return scale_x
 
 
 def save_calibration_template():
@@ -644,16 +770,16 @@ def ego_lane_center(lane_mask, height, width):
         xs = np.where(dilated[v] > 0)[0]
         candidate = None
         if len(xs):
-            left = xs[xs < centre - 4]
-            right = xs[xs > centre + 4]
+            left = xs[xs < centre - LANE_STRADDLE_GUARD_PX]
+            right = xs[xs > centre + LANE_STRADDLE_GUARD_PX]
             if len(left) and len(right):
                 left_x = float(left.max())
                 right_x = float(right.min())
                 lane_w = right_x - left_x
                 expected_w = LANE_WIDTH_REF_M * (v - HORIZON_V) / CAM_HEIGHT_M
-                lo = max(40.0, LANE_WIDTH_FRAC_LO * expected_w)
-                hi = min(560.0, LANE_WIDTH_FRAC_HI * expected_w)
-                converges = prev_width is None or lane_w <= prev_width + 28.0
+                lo = max(LANE_WIDTH_FLOOR_PX, LANE_WIDTH_FRAC_LO * expected_w)
+                hi = min(LANE_WIDTH_CEIL_PX, LANE_WIDTH_FRAC_HI * expected_w)
+                converges = prev_width is None or lane_w <= prev_width + LANE_WIDTH_CONVERGE_PX
                 if lo <= lane_w <= hi and converges:
                     candidate = 0.5 * (left_x + right_x)
                     prev_width = lane_w
@@ -694,7 +820,7 @@ def ego_lane_center_from_instances(lanes, height, width):
         sorted_lanes.append((lane[order, 1], lane[order, 0]))  # (ys, xs)
 
     def x_at(ys, xs, y):
-        if y < ys[0] - 3 or y > ys[-1] + 3:
+        if y < ys[0] - LANE_ROW_TOL_PX or y > ys[-1] + LANE_ROW_TOL_PX:
             return None
         return float(np.interp(y, ys, xs))
 
@@ -762,7 +888,7 @@ def fit_lane_curve(lanes):
     for lane in lanes:
         order = np.argsort(lane[:, 1])
         ys, xs = lane[order, 1], lane[order, 0]
-        if pick_row < ys[0] - 3 or pick_row > ys[-1] + 3:
+        if pick_row < ys[0] - LANE_ROW_TOL_PX or pick_row > ys[-1] + LANE_ROW_TOL_PX:
             continue                      # must span the near field
         candidates.append((float(np.interp(pick_row, ys, xs)), ys, xs))
     left = [c for c in candidates if c[0] < VANISH_U]
@@ -773,7 +899,7 @@ def fit_lane_curve(lanes):
     _, yr_v, xr_u = min(right, key=lambda c: c[0])
 
     def to_ground(v, u):
-        mask = v > HORIZON_V + 30
+        mask = v > HORIZON_V + DEPTH_HORIZON_EXCLUDE_PX
         d = CAM_FOCAL_PX * CAM_HEIGHT_M / (v[mask] - HORIZON_V)
         y = (u[mask] - VANISH_U) * d / CAM_FOCAL_PX
         order = np.argsort(d)
@@ -976,9 +1102,9 @@ def aimed_ribbon_geometry(road_mask, height, width, aim_state, lookahead_offset=
     band = road_mask[max(0, v0):min(height, v1)]
     xs = np.where(band > 0)[1]
     mid = VANISH_U
-    if len(xs) > 40:
-        central = xs[(xs > VANISH_U - 160) & (xs < VANISH_U + 160)]
-        if len(central) > 40:
+    if len(xs) > AIM_MIN_MASK_PX:
+        central = xs[(xs > VANISH_U - AIM_CENTRAL_WINDOW_PX) & (xs < VANISH_U + AIM_CENTRAL_WINDOW_PX)]
+        if len(central) > AIM_MIN_MASK_PX:
             mid = float(np.median(central))
 
     # The lane detection supplies only the near-field lateral placement (which lane
@@ -1190,7 +1316,7 @@ def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255):
             continue
         u = float(np.interp(v, vs_sorted, us_sorted))
         # local forward direction of the path (toward smaller v)
-        v_ahead = max(float(vs_sorted[0]), v - 6.0)
+        v_ahead = max(float(vs_sorted[0]), v - CHEVRON_TANGENT_LOOKBACK_PX)
         u_ahead = float(np.interp(v_ahead, vs_sorted, us_sorted))
         tangent = np.array([u_ahead - u, v_ahead - v], dtype=np.float64)
         norm = float(np.hypot(*tangent))
@@ -1251,8 +1377,8 @@ def build_path_overlay(geometry, height, width, chevron_phase_m=0.0):
     rails_cov = np.zeros((height, width), dtype=np.uint8)
     left = np.round(geometry["left"]).astype(np.int32)
     right = np.round(geometry["right"]).astype(np.int32)
-    cv2.polylines(rails_cov, [left], False, 255, 2, cv2.LINE_AA)
-    cv2.polylines(rails_cov, [right], False, 255, 2, cv2.LINE_AA)
+    cv2.polylines(rails_cov, [left], False, 255, RAIL_STROKE_PX, cv2.LINE_AA)
+    cv2.polylines(rails_cov, [right], False, 255, RAIL_STROKE_PX, cv2.LINE_AA)
 
     dash_cov = np.zeros((height, width), dtype=np.uint8)
     if geometry.get("traj") is not None:
@@ -1435,6 +1561,11 @@ def preview_calibration(image_path, output_path, draw_guides=True):
     apply_calibration_overrides()
 
     height, width = frame.shape[:2]
+
+    # Without this, tuning from a 4K still would bake compensating garbage into
+    # the calibration JSON.
+    apply_resolution_scaling(width, height)
+
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
     blend_path(frame, overlay, None)
@@ -1605,9 +1736,9 @@ def fit_depth_to_metric(depth_norm, road_soft):
     if road_soft is None:
         return None
     ys, xs = np.where(road_soft > 0.5)
-    keep = ys > (HORIZON_V + 8)
+    keep = ys > (HORIZON_V + FIT_DEPTH_HORIZON_EXCLUDE_PX)
     ys, xs = ys[keep], xs[keep]
-    if len(ys) < 200:
+    if len(ys) < FIT_DEPTH_MIN_ROAD_PX:
         return None
     if len(ys) > 6000:
         idx = np.linspace(0, len(ys) - 1, 6000).astype(int)
@@ -1708,7 +1839,7 @@ def draw_highlights(frame, selected, close_colour, far_colour, show_class=False)
             label = " ".join(part for part in parts if part)
             if label:
                 label_x = box[0]
-                label_y = max(18, box[1] - 8)
+                label_y = max(int(LABEL_TOP_CLAMP_PX), box[1] - int(LABEL_ABOVE_BOX_PX))
                 cv2.putText(frame, label, (label_x, label_y),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_BACKGROUND, 3, cv2.LINE_AA)
                 cv2.putText(frame, label, (label_x, label_y),
@@ -1823,6 +1954,10 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     apply_calibration_overrides()
 
     fps, width, height, frame_count = get_video_metadata(INPUT_VIDEO)
+
+    # This path had no resolution handling at all, and it is the one
+    # render_timeline_clip.py drives for every shipped video.
+    apply_resolution_scaling(width, height)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
@@ -2018,12 +2153,8 @@ def render_video(effect_plan):
 
     fps, width, height, frame_count = get_video_metadata(INPUT_VIDEO)
 
-    if (width, height) != (CALIB_REF_WIDTH, CALIB_REF_HEIGHT):
-        print(
-            "WARNING: input video is %dx%d but the camera calibration is tuned for %dx%d;"
-            % (width, height, CALIB_REF_WIDTH, CALIB_REF_HEIGHT)
-        )
-        print("         the projected path may be misplaced. Re-tune with --calibrate.")
+    # Was a warning that rendered anyway; the geometry is now actually corrected.
+    apply_resolution_scaling(width, height)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
