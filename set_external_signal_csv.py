@@ -6,7 +6,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 POLICY_FILE = os.path.join(HERE, "policy_demo.py")
-CSV_PATH = "C:/Users/localadmin/Desktop/Shadab/alpamayo_outputs/alpamayo_offline_when_TuCsyBF3nHU.csv"
+
+# Written verbatim into policy_demo.py's EXTERNAL_SIGNAL_CSV line. Keep it
+# relative to the repo root: policy_demo.py resolves a relative value against
+# its own folder, so the checkout can move without this going stale. An
+# absolute path still works if you need to point outside the repo.
+CSV_PATH = "alpamayo_outputs/alpamayo_offline_when_TuCsyBF3nHU.csv"
 
 
 def main():

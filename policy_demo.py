@@ -128,7 +128,10 @@ OCCLUSION_FRAME_STEP = 8
 # This can contain either low-level perception scores or offline "when" outputs
 # from Alpamayo / adaptive prediction. When available, offline explanation-needed
 # rows are preferred over the proxy trigger.
-EXTERNAL_SIGNAL_CSV = "C:/Users/localadmin/Desktop/Shadab/alpamayo_outputs/alpamayo_offline_when_TuCsyBF3nHU.csv"
+# A relative path resolves against this file's folder; an absolute path is used
+# as is. Keep this a plain quoted string: set_external_signal_csv.py rewrites
+# the line by regex and will not match an expression.
+EXTERNAL_SIGNAL_CSV = "alpamayo_outputs/alpamayo_offline_when_TuCsyBF3nHU.csv"
 # Offline model "when" configuration.
 # Mark's latest direction is: compute WHEN offline, then update UI parameters
 # during the study. Therefore this script prefers offline model signals whenever
@@ -224,8 +227,17 @@ VIDEO_USERNAME = common.get_secrets("ftp_username")
 VIDEO_PASSWORD = common.get_secrets("ftp_password")
 OUTPUT_DIR = os.path.join(common.get_configs("output_dir"), "mark_when_policy_demo")
 
-if EXTERNAL_SIGNAL_CSV:
+if EXTERNAL_SIGNAL_CSV and os.path.isabs(EXTERNAL_SIGNAL_CSV):
     EXTERNAL_SIGNAL_PATH = EXTERNAL_SIGNAL_CSV
+elif EXTERNAL_SIGNAL_CSV:
+    # Resolve against this file's folder so the default survives a move of the
+    # checkout. It previously named an absolute path outside the repo, which the
+    # consolidation into opticarvis/ left dangling - load_external_signals then
+    # warned and every clip fell back to the proxy WHEN trigger.
+    EXTERNAL_SIGNAL_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        EXTERNAL_SIGNAL_CSV,
+    ).replace("\\", "/")
 else:
     EXTERNAL_SIGNAL_PATH = ""
 

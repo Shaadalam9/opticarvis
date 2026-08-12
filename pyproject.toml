@@ -31,6 +31,16 @@ dependencies = [
 # what makes pinning them dangerous: it would resolve cleanly and look correct
 # while installing a CUDA 12.8 build. From torch 2.11.0 the PyPI Linux wheels
 # are CUDA 13.0 builds, which is what an sm_121 part (DGX Spark / GB10) wants.
+[tool.uv]
+# The lock is generated on Windows but deployed to Linux aarch64 (DGX Spark).
+# By default uv only guarantees wheels for the locking platform, so a re-lock
+# could pin a version with no aarch64 wheel and fail at deploy time on Spark.
+# This forces the resolver to backtrack until every package has one, turning
+# that into a lock-time failure here instead.
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
