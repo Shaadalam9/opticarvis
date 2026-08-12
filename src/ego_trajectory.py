@@ -49,6 +49,12 @@ from pipeline_common import (
 
 # Flat ground pinhole calibration. Keep these aligned with
 # final_preview_renderer.py defaults unless you intentionally retune both.
+# The calibration below is absolute pixels at this reference resolution; every
+# frame is resized to it in gray_frame(). Keep in step with
+# final_preview_renderer.CALIB_REF_WIDTH / CALIB_REF_HEIGHT.
+CALIB_REF_WIDTH = 1280
+CALIB_REF_HEIGHT = 720
+
 FOCAL_PX = 1000.0
 CAM_HEIGHT_M = 1.30
 HORIZON_V = 448.0
@@ -76,6 +82,27 @@ _LK = dict(
 
 
 def gray_frame(frame):
+    """Greyscale at the resolution the flat-ground calibration assumes.
+
+    FOCAL_PX, HORIZON_V, VANISH_U and GROUND_BAND are absolute pixels at
+    CALIB_REF_WIDTH x CALIB_REF_HEIGHT. Most clips in this project are
+    3840x2160, where rows 520-690 land in the sky: every tracked feature then
+    fails the (v > HORIZON_V + GROUND_MIN_ROWS) test or returns a nonsense
+    depth, the median forward step collapses to ~0, and the clip reads as a
+    STATIONARY vehicle rather than as an error. Resizing here keeps the
+    calibration exact and makes the metric output resolution independent --
+    depth is f*H/(v - horizon), so working in calibration pixels throughout
+    yields the same metres at any input size.
+
+    This is an exact no-op for clips already at the reference resolution.
+    """
+    if (frame.shape[1], frame.shape[0]) != (CALIB_REF_WIDTH, CALIB_REF_HEIGHT):
+        frame = cv2.resize(
+            frame,
+            (CALIB_REF_WIDTH, CALIB_REF_HEIGHT),
+            interpolation=cv2.INTER_AREA,
+        )
+
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 

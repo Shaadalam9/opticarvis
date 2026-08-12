@@ -95,11 +95,11 @@ NUM_WAYPOINTS = 64
 # src/final_preview_renderer.py. Retune all three together, never just one.
 #
 # These numbers are expressed in 1280x720 pixels (VANISH_U 636 ~ 1280/2), so
-# every VO frame is resized to CALIB_SIZE first. Applying them to a 4K frame
+# every VO frame is resized to the reference first. Applying them to a 4K frame
 # puts the ground band in the sky and the depth term collapses -- which reads
 # as a stationary vehicle rather than as an error.
-CALIB_WIDTH = 1280
-CALIB_HEIGHT = 720
+CALIB_REF_WIDTH = 1280
+CALIB_REF_HEIGHT = 720
 
 FOCAL_PX = 1000.0
 CAM_HEIGHT_M = 1.30
@@ -308,7 +308,7 @@ def calibration_gray(frame_bgr):
 
     resized = cv2.resize(
         frame_bgr,
-        (CALIB_WIDTH, CALIB_HEIGHT),
+        (CALIB_REF_WIDTH, CALIB_REF_HEIGHT),
         interpolation=cv2.INTER_AREA,
     )
 
