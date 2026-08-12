@@ -1,0 +1,16 @@
+# Line endings.
+#
+# Without this file each contributor's core.autocrlf decides what lands in the
+# index, so the same file can arrive as LF from one machine and CRLF from the
+# next. text=auto stores every text file as LF in the repository and checks it
+# out with the platform's native endings, which keeps diffs to the lines that
+# actually changed.
+* text=auto
+
+# Binary: never eol-convert these, and never try to diff them as text.
+# The model weights are gitignored, but a forced add must not corrupt them.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.pt   binary
+*.pth  binary
