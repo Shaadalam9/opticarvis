@@ -13,12 +13,10 @@ Current implementation:
     For the current Alpamayo decision, the main target is:
         pedestrians_and_crosswalk
 
-Run from the single OptiCarVis uv venv:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
-    C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe semantic_segmentation_module.py
+Run from the repo root, in the project venv:
+    python src/semantic_segmentation_module.py
 
-If ultralytics is missing:
-    uv pip install --python C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe ultralytics opencv-python
+ultralytics is a declared dependency, so `uv sync --frozen` installs it.
 """
 
 import json

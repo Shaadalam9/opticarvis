@@ -22,12 +22,11 @@ masks occlude the ribbon (it passes behind them) and drive contour highlights.
 Highlight selection is locked to track IDs and the boxes are smoothed over time so
 the overlay does not flicker.
 
-Run the full render:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
-    C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe final_preview_renderer.py
+Run the full render, from the repo root in the project venv:
+    python src/final_preview_renderer.py
 
 Tune the camera scalars quickly on one still frame (no video, no tracking):
-    C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe final_preview_renderer.py --calibrate <input.jpg> <output.png>
+    python src/final_preview_renderer.py --calibrate <input.jpg> <output.png>
 The calibration overlay draws the horizon line, the vanishing point, and metre
 distance ticks so HORIZON_V / VANISH_U / CAM_FOCAL_PX / CAM_HEIGHT_M can be
 adjusted by eye.

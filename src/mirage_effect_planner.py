@@ -15,9 +15,8 @@ MIRAGE style categories used here:
     diminished reality -> reduce background salience
     modified reality   -> alter visual emphasis of the causal region
 
-Run from the single OptiCarVis uv venv:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
-    C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe mirage_effect_planner.py
+Run from the repo root, in the project venv:
+    python src/mirage_effect_planner.py
 """
 
 import json

@@ -16,9 +16,8 @@ Later upgrade:
     Replace the proxy with a true monocular depth model such as Depth Anything,
     Metric3D, ZoeDepth, or another selected model.
 
-Run from the single OptiCarVis uv venv:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
-    C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe depth_estimation_module.py
+Run from the repo root, in the project venv:
+    python src/depth_estimation_module.py
 """
 
 import json
