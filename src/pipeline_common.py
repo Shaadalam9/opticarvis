@@ -1,21 +1,40 @@
-r"""Shared helpers and per-clip configuration for the OptiCarVis workflow.
+r"""Shared helpers and per clip configuration for the OptiCarVis workflow.
 
-This file is the single source of truth for the current clip/job.
+This file is the single source of truth for the current clip or job.
 The batch runner overrides these values with environment variables, so you do
 not need to edit every module for every city or every 30 second window.
 
+Folder layout after consolidation:
+
+opticarvis/
+    src/
+    videos/
+    mapping.csv
+    alpamayo_outputs/
+    workflow_outputs/
+    external/
+        alpamayo/
+        oom-free-alpamayo/
+        UFLDv2/
+
 Common environment variables:
-    OPTICARVIS_PROJECT_ROOT
-    OPTICARVIS_VIDEO_ID
-    OPTICARVIS_SEGMENT_START_S
-    OPTICARVIS_CLIP_LENGTH_S
-    OPTICARVIS_CLIP_VIDEO
-    OPTICARVIS_SOURCE_VIDEO
-    OPTICARVIS_ALPAMAYO_JSON
-    OPTICARVIS_JOB_ID
-    OPTICARVIS_LOCALITY
-    OPTICARVIS_COUNTRY
-    OPTICARVIS_CONTINENT
+OPTICARVIS_PROJECT_ROOT
+OPTICARVIS_VIDEO_ID
+OPTICARVIS_SEGMENT_START_S
+OPTICARVIS_CLIP_LENGTH_S
+OPTICARVIS_CLIP_VIDEO
+OPTICARVIS_SOURCE_VIDEO
+OPTICARVIS_ALPAMAYO_JSON
+OPTICARVIS_JOB_ID
+OPTICARVIS_LOCALITY
+OPTICARVIS_COUNTRY
+OPTICARVIS_CONTINENT
+OPTICARVIS_MAPPING_CSV
+OPTICARVIS_WORKFLOW_OUTPUTS
+OPTICARVIS_ALPAMAYO_OUTPUTS
+OPTICARVIS_ALPAMAYO_REPO
+OPTICARVIS_OOM_FREE_ALPAMAYO_REPO
+OPTICARVIS_UFLDV2_DIR
 """
 
 import json
@@ -24,10 +43,20 @@ import shutil
 import subprocess
 
 
-PROJECT_ROOT = os.environ.get(
-    "OPTICARVIS_PROJECT_ROOT",
-    "C:/Users/localadmin/Desktop/Shadab",
+def normalise_path(path):
+    """Return a path with forward slashes for stable JSON and logging."""
+    return os.path.abspath(path).replace("\\", "/")
+
+
+SRC_DIR = normalise_path(os.path.dirname(__file__))
+DEFAULT_PROJECT_ROOT = normalise_path(os.path.join(SRC_DIR, ".."))
+
+PROJECT_ROOT = normalise_path(
+    os.environ.get("OPTICARVIS_PROJECT_ROOT", DEFAULT_PROJECT_ROOT)
 )
+
+# Kept as an alias because older modules may still import OPTICARVIS_DIR.
+OPTICARVIS_DIR = PROJECT_ROOT
 
 VIDEO_ID = os.environ.get("OPTICARVIS_VIDEO_ID", "TuCsyBF3nHU")
 SEGMENT_START_TIME_S = float(os.environ.get("OPTICARVIS_SEGMENT_START_S", "4630.0"))
@@ -42,17 +71,57 @@ LOCALITY = os.environ.get("OPTICARVIS_LOCALITY", "")
 COUNTRY = os.environ.get("OPTICARVIS_COUNTRY", "")
 CONTINENT = os.environ.get("OPTICARVIS_CONTINENT", "")
 
-WORKFLOW_OUTPUTS = PROJECT_ROOT + "/workflow_outputs"
-OPTICARVIS_DIR = PROJECT_ROOT + "/opticarvis"
-
-MAPPING_CSV = os.environ.get(
-    "OPTICARVIS_MAPPING_CSV",
-    OPTICARVIS_DIR + "/mapping.csv",
+VIDEOS_DIR = normalise_path(
+    os.environ.get("OPTICARVIS_VIDEOS_DIR", PROJECT_ROOT + "/videos")
 )
 
-SOURCE_VIDEO = os.environ.get(
-    "OPTICARVIS_SOURCE_VIDEO",
-    OPTICARVIS_DIR + "/videos/" + VIDEO_ID + ".mp4",
+WORKFLOW_OUTPUTS = normalise_path(
+    os.environ.get("OPTICARVIS_WORKFLOW_OUTPUTS", PROJECT_ROOT + "/workflow_outputs")
+)
+
+ALPAMAYO_OUTPUTS = normalise_path(
+    os.environ.get("OPTICARVIS_ALPAMAYO_OUTPUTS", PROJECT_ROOT + "/alpamayo_outputs")
+)
+
+CROWD_CLIPS_DIR = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_CROWD_CLIPS_DIR",
+        ALPAMAYO_OUTPUTS + "/crowd_clips",
+    )
+)
+
+ALPAMAYO_JSON_DIR = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_ALPAMAYO_JSON_DIR",
+        ALPAMAYO_OUTPUTS + "/alpamayo_json",
+    )
+)
+
+EXTERNAL_DIR = normalise_path(
+    os.environ.get("OPTICARVIS_EXTERNAL_DIR", PROJECT_ROOT + "/external")
+)
+
+ALPAMAYO_REPO = normalise_path(
+    os.environ.get("OPTICARVIS_ALPAMAYO_REPO", EXTERNAL_DIR + "/alpamayo")
+)
+
+OOM_FREE_ALPAMAYO_REPO = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_OOM_FREE_ALPAMAYO_REPO",
+        EXTERNAL_DIR + "/oom-free-alpamayo",
+    )
+)
+
+UFLDV2_DIR = normalise_path(
+    os.environ.get("OPTICARVIS_UFLDV2_DIR", EXTERNAL_DIR + "/UFLDv2")
+)
+
+MAPPING_CSV = normalise_path(
+    os.environ.get("OPTICARVIS_MAPPING_CSV", PROJECT_ROOT + "/mapping.csv")
+)
+
+SOURCE_VIDEO = normalise_path(
+    os.environ.get("OPTICARVIS_SOURCE_VIDEO", VIDEOS_DIR + "/" + VIDEO_ID + ".mp4")
 )
 
 
@@ -62,13 +131,18 @@ def clip_length_tag():
 
 
 def segment_tag():
-    """Filename stem shared by every per-clip artefact."""
+    """Filename stem shared by every per clip artefact."""
     return VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S))
 
 
 def workflow_path(*parts):
     """Join parts under PROJECT_ROOT/workflow_outputs with forward slashes."""
-    return "/".join([WORKFLOW_OUTPUTS, *parts])
+    return normalise_path(os.path.join(WORKFLOW_OUTPUTS, *parts))
+
+
+def alpamayo_output_path(*parts):
+    """Join parts under PROJECT_ROOT/alpamayo_outputs with forward slashes."""
+    return normalise_path(os.path.join(ALPAMAYO_OUTPUTS, *parts))
 
 
 def clip_stem(clip_path):
@@ -82,28 +156,21 @@ def ensure_dir(path):
         os.makedirs(path)
 
 
-CLIP_VIDEO = os.environ.get(
-    "OPTICARVIS_CLIP_VIDEO",
-    workflow_path(
-        "..",
-        "alpamayo_outputs",
-        "crowd_clips",
-        segment_tag() + "_" + clip_length_tag() + ".mp4",
-    ).replace("/workflow_outputs/../", "/"),
+CLIP_VIDEO = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_CLIP_VIDEO",
+        CROWD_CLIPS_DIR + "/" + segment_tag() + "_" + clip_length_tag() + ".mp4",
+    )
 )
 
-ALPAMAYO_JSON = os.environ.get(
-    "OPTICARVIS_ALPAMAYO_JSON",
-    workflow_path(
-        "..",
-        "alpamayo_outputs",
-        "alpamayo_json",
-        segment_tag() + "_alpamayo.json",
-    ).replace("/workflow_outputs/../", "/"),
+ALPAMAYO_JSON = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_ALPAMAYO_JSON",
+        ALPAMAYO_JSON_DIR + "/" + segment_tag() + "_alpamayo.json",
+    )
 )
 
 STATE_JSON = workflow_path(segment_tag() + "_workflow_state.json")
-
 
 # Delivery encode. cv2.VideoWriter can only emit mp4v/FMP4 here, which many
 # players and browsers will not play, so renders can be transcoded to H.264.
@@ -124,7 +191,7 @@ def write_json(path, payload):
     """Write payload as pretty printed JSON."""
     ensure_dir(os.path.dirname(path))
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
 def read_jsonl(path):
@@ -206,6 +273,15 @@ def current_job_summary():
         "locality": LOCALITY,
         "country": COUNTRY,
         "continent": CONTINENT,
+        "project_root": PROJECT_ROOT,
+        "opticarvis_dir": OPTICARVIS_DIR,
+        "videos_dir": VIDEOS_DIR,
+        "workflow_outputs": WORKFLOW_OUTPUTS,
+        "alpamayo_outputs": ALPAMAYO_OUTPUTS,
+        "external_dir": EXTERNAL_DIR,
+        "alpamayo_repo": ALPAMAYO_REPO,
+        "oom_free_alpamayo_repo": OOM_FREE_ALPAMAYO_REPO,
+        "ufldv2_dir": UFLDV2_DIR,
         "source_video": SOURCE_VIDEO,
         "clip_video": CLIP_VIDEO,
         "alpamayo_json": ALPAMAYO_JSON,

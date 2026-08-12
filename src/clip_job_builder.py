@@ -1,11 +1,11 @@
 r"""Build 30 second OptiCarVis clip jobs from the 100 city CROWD mapping.
 
 Input:
-    C:/Users/localadmin/Desktop/Shadab/opticarvis/mapping.csv
+    opticarvis/mapping.csv
 
 Output:
-    C:/Users/localadmin/Desktop/Shadab/workflow_outputs/clip_jobs.jsonl
-    C:/Users/localadmin/Desktop/Shadab/workflow_outputs/clip_jobs_summary.json
+    opticarvis/workflow_outputs/clip_jobs.jsonl
+    opticarvis/workflow_outputs/clip_jobs_summary.json
 
 Default policy:
     100 cities maximum
@@ -27,8 +27,12 @@ from pipeline_common import (
     PROJECT_ROOT,
     MAPPING_CSV,
     WORKFLOW_OUTPUTS,
+    VIDEOS_DIR,
+    CROWD_CLIPS_DIR,
+    ALPAMAYO_JSON_DIR,
     ensure_dir,
     write_json,
+    normalise_path,
 )
 
 
@@ -37,29 +41,39 @@ CITY_FOOTAGE_S = float(os.environ.get("OPTICARVIS_CITY_FOOTAGE_S", "3600"))
 CLIP_LENGTH_S = float(os.environ.get("OPTICARVIS_CLIP_LENGTH_S", "30"))
 STRIDE_S = float(os.environ.get("OPTICARVIS_STRIDE_S", "60"))
 
-OUTPUT_JSONL = os.environ.get(
-    "OPTICARVIS_CLIP_JOBS",
-    WORKFLOW_OUTPUTS + "/clip_jobs.jsonl",
+OUTPUT_JSONL = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_CLIP_JOBS",
+        WORKFLOW_OUTPUTS + "/clip_jobs.jsonl",
+    )
 )
 
-OUTPUT_SUMMARY = os.environ.get(
-    "OPTICARVIS_CLIP_JOBS_SUMMARY",
-    WORKFLOW_OUTPUTS + "/clip_jobs_summary.json",
+OUTPUT_SUMMARY = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_CLIP_JOBS_SUMMARY",
+        WORKFLOW_OUTPUTS + "/clip_jobs_summary.json",
+    )
 )
 
-VIDEO_ROOT = os.environ.get(
-    "OPTICARVIS_VIDEO_ROOT",
-    PROJECT_ROOT + "/opticarvis/videos",
+VIDEO_ROOT = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_VIDEO_ROOT",
+        os.environ.get("OPTICARVIS_VIDEOS_DIR", VIDEOS_DIR),
+    )
 )
 
-CLIP_ROOT = os.environ.get(
-    "OPTICARVIS_CLIP_ROOT",
-    PROJECT_ROOT + "/alpamayo_outputs/crowd_clips",
+CLIP_ROOT = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_CLIP_ROOT",
+        os.environ.get("OPTICARVIS_CROWD_CLIPS_DIR", CROWD_CLIPS_DIR),
+    )
 )
 
-ALPAMAYO_JSON_ROOT = os.environ.get(
-    "OPTICARVIS_ALPAMAYO_JSON_ROOT",
-    PROJECT_ROOT + "/alpamayo_outputs/alpamayo_json",
+ALPAMAYO_JSON_ROOT = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_ALPAMAYO_JSON_ROOT",
+        os.environ.get("OPTICARVIS_ALPAMAYO_JSON_DIR", ALPAMAYO_JSON_DIR),
+    )
 )
 
 
@@ -153,7 +167,6 @@ def row_intervals(row):
 
     for video_index, video_id in enumerate(videos):
         start_values = starts[video_index] if video_index < len(starts) else [0]
-        end_values = ends[video_index] if video_index < len(ends) else []
         time_values = times[video_index] if video_index < len(times) else []
 
         if not isinstance(start_values, list):
@@ -180,7 +193,7 @@ def row_intervals(row):
                     "end_s": float(end_s),
                     "time_of_day": time_code,
                     "duration_s": float(end_s - start_s),
-                    "source_video": VIDEO_ROOT + "/" + video_id + ".mp4",
+                    "source_video": normalise_path(VIDEO_ROOT + "/" + video_id + ".mp4"),
                 }
             )
 
@@ -227,7 +240,7 @@ def build_jobs_for_city(row, city_index):
                 + clip_tag
             )
 
-            clip_video = (
+            clip_video = normalise_path(
                 CLIP_ROOT
                 + "/"
                 + interval["video_id"]
@@ -238,7 +251,7 @@ def build_jobs_for_city(row, city_index):
                 + "s.mp4"
             )
 
-            alpamayo_json = (
+            alpamayo_json = normalise_path(
                 ALPAMAYO_JSON_ROOT
                 + "/"
                 + interval["video_id"]
@@ -280,7 +293,7 @@ def build_jobs_for_city(row, city_index):
 
 
 def main():
-    mapping_csv = sys.argv[1] if len(sys.argv) > 1 else MAPPING_CSV
+    mapping_csv = normalise_path(sys.argv[1] if len(sys.argv) > 1 else MAPPING_CSV)
 
     if not os.path.isfile(mapping_csv):
         print("Missing mapping CSV:")
@@ -323,6 +336,7 @@ def main():
             handle.write(json.dumps(job, ensure_ascii=False) + "\n")
 
     summary = {
+        "project_root": PROJECT_ROOT,
         "mapping_csv": mapping_csv,
         "output_jsonl": OUTPUT_JSONL,
         "city_count": len(rows),
@@ -342,11 +356,15 @@ def main():
     print("")
     print("Clip job builder complete")
     print("=========================")
+    print("project_root:", PROJECT_ROOT)
     print("mapping_csv:", mapping_csv)
     print("cities:", len(rows))
     print("total_jobs:", len(all_jobs))
     print("clip_length_s:", CLIP_LENGTH_S)
     print("stride_s:", STRIDE_S)
+    print("video_root:", VIDEO_ROOT)
+    print("clip_root:", CLIP_ROOT)
+    print("alpamayo_json_root:", ALPAMAYO_JSON_ROOT)
     print("jobs_jsonl:", OUTPUT_JSONL)
     print("summary_json:", OUTPUT_SUMMARY)
 

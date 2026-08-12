@@ -16,7 +16,7 @@ MIRAGE style categories used here:
     modified reality   -> alter visual emphasis of the causal region
 
 Run from the single OptiCarVis uv venv:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis
+    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
     C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe mirage_effect_planner.py
 """
 
@@ -24,65 +24,31 @@ import json
 import os
 
 from pipeline_common import (
-    PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
+    CLIP_VIDEO,
+    STATE_JSON,
     read_json,
     write_json,
     clamp,
+    ensure_dir,
+    segment_tag,
+    workflow_path,
 )
 
-STATE_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_workflow_state.json"
-)
+GEMMA_JSON = workflow_path("gemma_reasoning", segment_tag() + "_gemma_reasoning.json")
 
-GEMMA_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/gemma_reasoning/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_gemma_reasoning.json"
-)
+SEGMENTATION_JSON = workflow_path("segmentation", segment_tag() + "_segmentation.json")
 
-SEGMENTATION_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/segmentation/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_segmentation.json"
-)
+DEPTH_JSON = workflow_path("depth", segment_tag() + "_depth.json")
 
-DEPTH_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/depth/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_depth.json"
-)
+OUTPUT_DIR = workflow_path("mirage")
 
-OUTPUT_DIR = PROJECT_ROOT + "/workflow_outputs/mirage"
-
-OUTPUT_JSON = (
-    OUTPUT_DIR
-    + "/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_effect_plan.json"
-)
+OUTPUT_JSON = workflow_path("mirage", segment_tag() + "_effect_plan.json")
 
 
 def create_dirs():
-    if not os.path.isdir(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    ensure_dir(OUTPUT_DIR)
 
 
 def read_json_optional(input_file):
@@ -394,18 +360,11 @@ def build_effect_plan(workflow_state, gemma_payload, segmentation_payload, depth
         "gemma_summary": gemma_summary,
         "visual_layers": visual_layers,
         "renderer_contract": {
-            "input_video": PROJECT_ROOT
-            + "/alpamayo_outputs/crowd_clips/"
-            + VIDEO_ID
-            + "_"
-            + str(int(SEGMENT_START_TIME_S))
-            + "_30s.mp4",
-            "output_video": PROJECT_ROOT
-            + "/workflow_outputs/final_renders/"
-            + VIDEO_ID
-            + "_"
-            + str(int(SEGMENT_START_TIME_S))
-            + "_mirage_preview_roadline_v3.mp4",
+            "input_video": CLIP_VIDEO,
+            "output_video": workflow_path(
+                "final_renders",
+                segment_tag() + "_mirage_preview_roadline_v3.mp4",
+            ),
             "effect_plan_json": OUTPUT_JSON,
         },
         "notes": [

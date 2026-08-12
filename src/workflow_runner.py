@@ -10,7 +10,6 @@ import math
 import os
 
 from pipeline_common import (
-    PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
     CLIP_LENGTH_S,
@@ -20,26 +19,30 @@ from pipeline_common import (
     read_json,
     write_json,
     clamp,
+    ensure_dir,
+    segment_tag,
+    workflow_path,
 )
 
-OUTPUT_ROOT = PROJECT_ROOT + "/workflow_outputs"
-ALPAMAYO_CONTEXT_JSON = OUTPUT_ROOT + "/alpamayo_traces/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_alpamayo_context.json"
+ALPAMAYO_CONTEXT_JSON = workflow_path(
+    "alpamayo_traces",
+    segment_tag() + "_alpamayo_context.json",
+)
 
 OUTPUT_DIRS = [
-    OUTPUT_ROOT,
-    OUTPUT_ROOT + "/alpamayo_traces",
-    OUTPUT_ROOT + "/gemma_reasoning",
-    OUTPUT_ROOT + "/segmentation",
-    OUTPUT_ROOT + "/depth",
-    OUTPUT_ROOT + "/mirage",
-    OUTPUT_ROOT + "/final_renders",
+    workflow_path(),
+    workflow_path("alpamayo_traces"),
+    workflow_path("gemma_reasoning"),
+    workflow_path("segmentation"),
+    workflow_path("depth"),
+    workflow_path("mirage"),
+    workflow_path("final_renders"),
 ]
 
 
 def make_dirs():
     for output_dir in OUTPUT_DIRS:
-        if not os.path.isdir(output_dir):
-            os.makedirs(output_dir)
+        ensure_dir(output_dir)
 
 
 def flatten(value):

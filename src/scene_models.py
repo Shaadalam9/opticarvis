@@ -21,6 +21,8 @@ import os
 import cv2
 import numpy as np
 
+from pipeline_common import UFLDV2_DIR, normalise_path
+
 
 ROAD_SEG_MODEL = "nvidia/segformer-b0-finetuned-cityscapes-1024-1024"
 # Cityscapes label ids that count as drivable / walkable ground for the ribbon.
@@ -42,9 +44,15 @@ LANE_INPUT_H = 384
 # runs on the same torch/CUDA as everything else (no mmcv/mmdet). The repo is
 # vendored beside the project; only inference code is touched (DALI / tensorboard
 # imports in its util chain are stubbed since they are training-only).
-UFLD_REPO = os.environ.get(
-    "OPTICARVIS_UFLD_REPO", "C:/Users/localadmin/Desktop/Shadab/UFLDv2")
-UFLD_WEIGHTS = os.environ.get("OPTICARVIS_UFLD_WEIGHTS", UFLD_REPO + "/culane_res34.pth")
+UFLD_REPO = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_UFLD_REPO",
+        os.environ.get("OPTICARVIS_UFLDV2_DIR", UFLDV2_DIR),
+    )
+)
+UFLD_WEIGHTS = normalise_path(
+    os.environ.get("OPTICARVIS_UFLD_WEIGHTS", UFLD_REPO + "/culane_res34.pth")
+)
 UFLD_CFG = {
     "backbone": "34", "num_row": 72, "num_col": 81, "num_cell_row": 200,
     "num_cell_col": 100, "num_lanes": 4, "train_height": 320, "train_width": 1600,

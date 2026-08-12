@@ -14,7 +14,7 @@ Current implementation:
         pedestrians_and_crosswalk
 
 Run from the single OptiCarVis uv venv:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis
+    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
     C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe semantic_segmentation_module.py
 
 If ultralytics is missing:
@@ -28,49 +28,24 @@ import cv2
 import numpy as np
 
 from pipeline_common import (
-    PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
+    CLIP_VIDEO,
+    STATE_JSON,
     read_json,
     write_json,
+    ensure_dir,
+    segment_tag,
+    workflow_path,
 )
 
-STATE_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_workflow_state.json"
-)
+OUTPUT_DIR = workflow_path("segmentation")
 
-CLIP_VIDEO = (
-    PROJECT_ROOT
-    + "/alpamayo_outputs/crowd_clips/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_30s.mp4"
-)
+OUTPUT_JSON = workflow_path("segmentation", segment_tag() + "_segmentation.json")
 
-OUTPUT_DIR = PROJECT_ROOT + "/workflow_outputs/segmentation"
-
-OUTPUT_JSON = (
-    OUTPUT_DIR
-    + "/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_segmentation.json"
-)
-
-OUTPUT_PREVIEW_DIR = (
-    OUTPUT_DIR
-    + "/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_preview_frames"
+OUTPUT_PREVIEW_DIR = workflow_path(
+    "segmentation",
+    segment_tag() + "_preview_frames",
 )
 
 MODEL_NAME = "yolo26x-seg.pt"
@@ -93,11 +68,8 @@ CLASSES_TO_KEEP = sorted(list(COCO_NAMES.keys()))
 
 
 def create_dirs():
-    if not os.path.isdir(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-
-    if not os.path.isdir(OUTPUT_PREVIEW_DIR):
-        os.makedirs(OUTPUT_PREVIEW_DIR)
+    ensure_dir(OUTPUT_DIR)
+    ensure_dir(OUTPUT_PREVIEW_DIR)
 
 
 def get_clip_metadata(video_file):

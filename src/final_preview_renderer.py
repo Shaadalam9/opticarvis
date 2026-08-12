@@ -23,11 +23,11 @@ Highlight selection is locked to track IDs and the boxes are smoothed over time 
 the overlay does not flicker.
 
 Run the full render:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis
+    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
     C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe final_preview_renderer.py
 
 Tune the camera scalars quickly on one still frame (no video, no tracking):
-    ...\.venv\Scripts\python.exe final_preview_renderer.py --calibrate <input.jpg> <output.png>
+    C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe final_preview_renderer.py --calibrate <input.jpg> <output.png>
 The calibration overlay draws the horizon line, the vanishing point, and metre
 distance ticks so HORIZON_V / VANISH_U / CAM_FOCAL_PX / CAM_HEIGHT_M can be
 adjusted by eye.
@@ -42,9 +42,10 @@ import numpy as np
 from ultralytics import YOLO
 
 from pipeline_common import (
-    PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
+    CLIP_VIDEO,
+    STATE_JSON,
     read_json,
     write_json,
     clamp,
@@ -58,65 +59,25 @@ from pipeline_common import (
 # the workflow-state keys, and the renderer id.
 RENDER_VARIANT = "roadline_v3"
 
-STATE_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_workflow_state.json"
+EFFECT_PLAN_JSON = workflow_path("mirage", segment_tag() + "_effect_plan.json")
+ALPAMAYO_CONTEXT_JSON = workflow_path(
+    "alpamayo_traces",
+    segment_tag() + "_alpamayo_context.json",
 )
 
-EFFECT_PLAN_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/mirage/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_effect_plan.json"
-)
+INPUT_VIDEO = CLIP_VIDEO
 
-ALPAMAYO_CONTEXT_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/alpamayo_traces/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_alpamayo_context.json"
-)
+OUTPUT_DIR = workflow_path("final_renders")
 
-INPUT_VIDEO = (
-    PROJECT_ROOT
-    + "/alpamayo_outputs/crowd_clips/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_30s.mp4"
-)
-
-OUTPUT_DIR = PROJECT_ROOT + "/workflow_outputs/final_renders"
-
-OUTPUT_VIDEO = (
-    OUTPUT_DIR
-    + "/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_mirage_preview_"
-    + RENDER_VARIANT
-    + ".mp4"
+OUTPUT_VIDEO = workflow_path(
+    "final_renders",
+    segment_tag() + "_mirage_preview_" + RENDER_VARIANT + ".mp4",
 )
 
 # Second output that also highlights nearby vehicles.
-OUTPUT_VIDEO_VEHICLES = (
-    OUTPUT_DIR
-    + "/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_mirage_preview_"
-    + RENDER_VARIANT
-    + "_vehicles.mp4"
+OUTPUT_VIDEO_VEHICLES = workflow_path(
+    "final_renders",
+    segment_tag() + "_mirage_preview_" + RENDER_VARIANT + "_vehicles.mp4",
 )
 
 MODEL_NAME = "yolo26x-seg.pt"

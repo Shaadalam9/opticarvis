@@ -1,14 +1,28 @@
 r"""Batch entry point for the 100 city OptiCarVis analysis.
 
-This version uses the same FTP credential mechanism as the earlier OptiCarVis
-scripts and runs Alpamayo through infer_crowd_clip.py --clips:
+This version assumes the consolidated OptiCarVis folder layout:
 
-    VIDEO_BASE_URL  = common.get_configs("VIDEO_BASE_URL")
+    opticarvis/
+        src/
+        videos/
+        mapping.csv
+        alpamayo_outputs/
+        workflow_outputs/
+        external/
+            alpamayo/
+            oom-free-alpamayo/
+            UFLDv2/
+
+It uses the existing OptiCarVis credential mechanism:
+
+    VIDEO_BASE_URL   = common.get_configs("VIDEO_BASE_URL")
     SOURCE_VIDEO_DIR = common.get_configs("videos")
-    VIDEO_USERNAME = common.get_secrets("ftp_username")
-    VIDEO_PASSWORD = common.get_secrets("ftp_password")
+    VIDEO_USERNAME   = common.get_secrets("ftp_username")
+    VIDEO_PASSWORD   = common.get_secrets("ftp_password")
 
-It does not require setting FTP credentials manually in the terminal.
+It runs Alpamayo through:
+
+    external/oom-free-alpamayo/scripts/infer_crowd_clip.py --clips
 
 Usage:
     python batch_corrected_pipeline.py
@@ -16,7 +30,7 @@ Usage:
     python batch_corrected_pipeline.py 20 100
 
 The second form runs only 20 jobs.
-The third form starts at job index 100 and runs 20 jobs.
+The third form starts at zero based job index 100 and runs 20 jobs.
 """
 
 import csv
@@ -33,59 +47,68 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-# common.py and the config files are in the parent opticarvis folder.
-# This file is inside opticarvis/src, so add the parent folder before importing common.
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-OPTICARVIS_DIR = os.path.dirname(SRC_DIR)
-
-if OPTICARVIS_DIR not in sys.path:
-    sys.path.insert(0, OPTICARVIS_DIR)
-
-import common
 
 from pipeline_common import (
     PROJECT_ROOT,
     WORKFLOW_OUTPUTS,
+    ALPAMAYO_OUTPUTS,
+    ALPAMAYO_JSON_DIR,
+    OOM_FREE_ALPAMAYO_REPO,
+    VIDEOS_DIR,
     ensure_dir,
     append_jsonl,
     ffmpeg_path,
+    normalise_path,
 )
+
+# common.py and the config files are in the main opticarvis folder.
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+import common
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 
-CLIP_JOBS_JSONL = os.environ.get(
-    "OPTICARVIS_CLIP_JOBS",
-    WORKFLOW_OUTPUTS + "/clip_jobs.jsonl",
+CLIP_JOBS_JSONL = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_CLIP_JOBS",
+        WORKFLOW_OUTPUTS + "/clip_jobs.jsonl",
+    )
 )
 
-MASTER_INDEX_JSONL = os.environ.get(
-    "OPTICARVIS_MASTER_CLIP_INDEX",
-    WORKFLOW_OUTPUTS + "/master_clip_index.jsonl",
+MASTER_INDEX_JSONL = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_MASTER_CLIP_INDEX",
+        WORKFLOW_OUTPUTS + "/master_clip_index.jsonl",
+    )
 )
 
-PIPELINE_SCRIPT = os.environ.get(
-    "OPTICARVIS_SINGLE_PIPELINE",
-    SRC_DIR + "/run_corrected_pipeline.py",
+PIPELINE_SCRIPT = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_SINGLE_PIPELINE",
+        SRC_DIR + "/run_corrected_pipeline.py",
+    )
 )
 
-ALPAMAYO_REPO = os.environ.get(
-    "OPTICARVIS_ALPAMAYO_REPO",
-    PROJECT_ROOT + "/oom-free-alpamayo",
+OOM_ALPAMAYO_REPO = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_OOM_FREE_ALPAMAYO_REPO",
+        os.environ.get("OPTICARVIS_ALPAMAYO_REPO", OOM_FREE_ALPAMAYO_REPO),
+    )
 )
 
-ALPAMAYO_SCRIPT = os.environ.get(
-    "OPTICARVIS_ALPAMAYO_SCRIPT",
-    ALPAMAYO_REPO + "/scripts/infer_crowd_clip.py",
+ALPAMAYO_SCRIPT = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_ALPAMAYO_SCRIPT",
+        OOM_ALPAMAYO_REPO + "/scripts/infer_crowd_clip.py",
+    )
 )
 
 ALPAMAYO_CONFIG = os.environ.get("OPTICARVIS_ALPAMAYO_CONFIG", "config_5080_16gb.json")
-ALPAMAYO_JSON_DIR = os.environ.get(
-    "OPTICARVIS_ALPAMAYO_JSON_DIR",
-    PROJECT_ROOT + "/alpamayo_outputs/alpamayo_json",
-)
 
 EXTRACT_CLIPS = os.environ.get("OPTICARVIS_EXTRACT_CLIPS", "1") == "1"
 RUN_ALPAMAYO = os.environ.get("OPTICARVIS_RUN_ALPAMAYO", "1") == "1"
@@ -93,29 +116,91 @@ SKIP_EXISTING_STATE = os.environ.get("OPTICARVIS_SKIP_EXISTING_STATE", "0") == "
 
 VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi"]
 DOWNLOAD_MISSING_SOURCE_VIDEOS = True
-FTP_ALIASES = ["tue4", "tue5"]
+FTP_ALIASES = ["tue1", "tue2", "tue3", "tue4", "tue5"]
 FTP_CRAWL_PAGE_LIMIT = 500
 FTP_TIMEOUT_SECONDS = 20
 WHEN_START_LOCAL_S = 12.67
 WHEN_END_LOCAL_S = 15.60
 
+SOURCE_VIDEO_CACHE = {}
+MISSING_SOURCE_VIDEO_IDS = set()
+
+
 def as_project_path(path_value):
-    """Resolve relative config paths from the parent opticarvis folder."""
+    """Resolve relative config paths from the main opticarvis folder."""
     if not path_value:
         return path_value
 
     path_text = str(path_value)
 
     if os.path.isabs(path_text):
-        return path_text
+        return normalise_path(path_text)
 
-    return os.path.abspath(os.path.join(OPTICARVIS_DIR, path_text)).replace("\\", "/")
+    return normalise_path(os.path.join(PROJECT_ROOT, path_text))
 
 
-SOURCE_VIDEO_DIR = as_project_path(common.get_configs("videos"))
+configured_video_dir = common.get_configs("videos")
+SOURCE_VIDEO_DIR = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_SOURCE_VIDEO_DIR",
+        as_project_path(configured_video_dir) if configured_video_dir else VIDEOS_DIR,
+    )
+)
+
 VIDEO_BASE_URL = common.get_configs("VIDEO_BASE_URL")
 VIDEO_USERNAME = common.get_secrets("ftp_username")
 VIDEO_PASSWORD = common.get_secrets("ftp_password")
+
+
+def clip_tag(job):
+    return job["video_id"] + "_" + str(int(float(job["segment_start_time_s"])))
+
+
+def clip_length_tag(job):
+    value = int(round(float(job.get("clip_length_s", 30.0))))
+    return str(value) + "s"
+
+
+def source_video_path_for(job):
+    return normalise_path(os.path.join(SOURCE_VIDEO_DIR, job["video_id"] + ".mp4"))
+
+
+def clip_video_path_for(job):
+    return normalise_path(
+        os.path.join(
+            ALPAMAYO_OUTPUTS,
+            "crowd_clips",
+            clip_tag(job) + "_" + clip_length_tag(job) + ".mp4",
+        )
+    )
+
+
+def expected_alpamayo_json_path_for(job):
+    return normalise_path(os.path.join(ALPAMAYO_JSON_DIR, clip_tag(job) + "_alpamayo.json"))
+
+
+def state_json_for(job):
+    return normalise_path(os.path.join(WORKFLOW_OUTPUTS, clip_tag(job) + "_workflow_state.json"))
+
+
+def alpamayo_raw_json_path(job):
+    return normalise_path(
+        os.path.join(
+            ALPAMAYO_JSON_DIR,
+            "alpamayo_inference_output_" + clip_tag(job) + ".json",
+        )
+    )
+
+
+def normalise_job_paths(job):
+    """Force each job to use the consolidated opticarvis folder layout."""
+    job = dict(job)
+    job["clip_length_s"] = float(job.get("clip_length_s", 30.0))
+    job["segment_start_time_s"] = float(job["segment_start_time_s"])
+    job["source_video"] = source_video_path_for(job)
+    job["clip_video"] = clip_video_path_for(job)
+    job["alpamayo_json"] = expected_alpamayo_json_path_for(job)
+    return job
 
 
 def read_jobs(path):
@@ -132,33 +217,9 @@ def read_jobs(path):
         for line in handle:
             line = line.strip()
             if line:
-                jobs.append(json.loads(line))
+                jobs.append(normalise_job_paths(json.loads(line)))
 
     return jobs
-
-
-def state_json_for(job):
-    return (
-        PROJECT_ROOT
-        + "/workflow_outputs/"
-        + job["video_id"]
-        + "_"
-        + str(int(float(job["segment_start_time_s"])))
-        + "_workflow_state.json"
-    )
-
-
-def clip_tag(job):
-    return job["video_id"] + "_" + str(int(float(job["segment_start_time_s"])))
-
-
-def alpamayo_raw_json_path(job):
-    return (
-        ALPAMAYO_JSON_DIR
-        + "/alpamayo_inference_output_"
-        + clip_tag(job)
-        + ".json"
-    )
 
 
 def get_video_resolution_label(local_path):
@@ -196,7 +257,7 @@ def get_video_fps(local_path):
 
 def save_video_response(response, filename_with_ext, source_url):
     os.makedirs(SOURCE_VIDEO_DIR, exist_ok=True)
-    local_path = os.path.join(SOURCE_VIDEO_DIR, filename_with_ext)
+    local_path = normalise_path(os.path.join(SOURCE_VIDEO_DIR, filename_with_ext))
 
     if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
         logger.info("Using already downloaded source video: %s", local_path)
@@ -301,6 +362,12 @@ def download_source_video_from_ftp(video_id):
     if not DOWNLOAD_MISSING_SOURCE_VIDEOS:
         return None
 
+    if video_id in MISSING_SOURCE_VIDEO_IDS:
+        return None
+
+    if video_id in SOURCE_VIDEO_CACHE:
+        return SOURCE_VIDEO_CACHE[video_id]
+
     if not VIDEO_BASE_URL:
         logger.warning("VIDEO_BASE_URL is missing in common.get_configs('VIDEO_BASE_URL')")
         return None
@@ -322,7 +389,9 @@ def download_source_video_from_ftp(video_id):
         response = fetch_url(session, direct_url, stream=True)
 
         if response is not None:
-            return save_video_response(response, filename_with_ext, direct_url)
+            local_path = save_video_response(response, filename_with_ext, direct_url)
+            SOURCE_VIDEO_CACHE[video_id] = local_path
+            return local_path
 
     for alias in FTP_ALIASES:
         browse_url = urljoin(base_url, "v/" + alias + "/browse")
@@ -334,22 +403,25 @@ def download_source_video_from_ftp(video_id):
         response = fetch_url(session, found_url, stream=True)
 
         if response is not None:
-            return save_video_response(response, filename_with_ext, found_url)
+            local_path = save_video_response(response, filename_with_ext, found_url)
+            SOURCE_VIDEO_CACHE[video_id] = local_path
+            return local_path
 
     logger.warning("Source video %s was not found on the FTP server", filename_with_ext)
+    MISSING_SOURCE_VIDEO_IDS.add(video_id)
 
     return None
 
 
 def find_source_video(video_id, preferred_path):
     if preferred_path and os.path.isfile(preferred_path):
-        return preferred_path
+        return normalise_path(preferred_path)
 
     for ext in VIDEO_EXTENSIONS:
         path = os.path.join(SOURCE_VIDEO_DIR, video_id + ext)
 
         if os.path.isfile(path):
-            return path
+            return normalise_path(path)
 
     return download_source_video_from_ftp(video_id)
 
@@ -405,13 +477,11 @@ def extract_clip(job):
 
 def write_alpamayo_manifest(jobs, start_index):
     ensure_dir(WORKFLOW_OUTPUTS)
-    manifest_path = (
-        WORKFLOW_OUTPUTS
-        + "/alpamayo_manifest_"
-        + str(start_index)
-        + "_"
-        + str(len(jobs))
-        + ".csv"
+    manifest_path = normalise_path(
+        os.path.join(
+            WORKFLOW_OUTPUTS,
+            "alpamayo_manifest_" + str(start_index) + "_" + str(len(jobs)) + ".csv",
+        )
     )
 
     with open(manifest_path, "w", encoding="utf-8", newline="") as handle:
@@ -493,7 +563,7 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
         ALPAMAYO_CONFIG,
     ]
 
-    completed = subprocess.run(command, cwd=ALPAMAYO_REPO)
+    completed = subprocess.run(command, cwd=OOM_ALPAMAYO_REPO)
 
     if completed.returncode != 0:
         print("")
@@ -513,6 +583,11 @@ def job_environment(job):
     env = os.environ.copy()
 
     env["OPTICARVIS_PROJECT_ROOT"] = PROJECT_ROOT
+    env["OPTICARVIS_WORKFLOW_OUTPUTS"] = WORKFLOW_OUTPUTS
+    env["OPTICARVIS_ALPAMAYO_OUTPUTS"] = ALPAMAYO_OUTPUTS
+    env["OPTICARVIS_ALPAMAYO_JSON_DIR"] = ALPAMAYO_JSON_DIR
+    env["OPTICARVIS_VIDEOS_DIR"] = SOURCE_VIDEO_DIR
+    env["OPTICARVIS_OOM_FREE_ALPAMAYO_REPO"] = OOM_ALPAMAYO_REPO
     env["OPTICARVIS_JOB_ID"] = job["job_id"]
     env["OPTICARVIS_VIDEO_ID"] = job["video_id"]
     env["OPTICARVIS_SEGMENT_START_S"] = str(job["segment_start_time_s"])
@@ -658,10 +733,14 @@ def main():
     print("jobs_to_run:", len(selected))
     print("extract_clips:", EXTRACT_CLIPS)
     print("run_alpamayo:", RUN_ALPAMAYO)
-    print("opticarvis_dir:", OPTICARVIS_DIR)
+    print("project_root:", PROJECT_ROOT)
     print("source_video_dir:", SOURCE_VIDEO_DIR)
+    print("workflow_outputs:", WORKFLOW_OUTPUTS)
+    print("alpamayo_outputs:", ALPAMAYO_OUTPUTS)
     print("video_base_url:", "configured" if VIDEO_BASE_URL else "missing")
     print("ftp_credentials:", "configured" if VIDEO_USERNAME and VIDEO_PASSWORD else "missing")
+    print("ftp_aliases:", ", ".join(FTP_ALIASES))
+    print("alpamayo_repo:", OOM_ALPAMAYO_REPO)
     print("alpamayo_script:", ALPAMAYO_SCRIPT)
     print("alpamayo_config:", ALPAMAYO_CONFIG)
     print("alpamayo_json_dir:", ALPAMAYO_JSON_DIR)

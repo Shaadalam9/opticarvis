@@ -14,20 +14,22 @@ import os
 import cv2
 
 from pipeline_common import (
-    PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
+    CLIP_VIDEO,
+    STATE_JSON,
     read_json,
     write_json,
+    ensure_dir,
+    segment_tag,
+    workflow_path,
 )
 
-STATE_JSON = PROJECT_ROOT + "/workflow_outputs/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_workflow_state.json"
-CLIP_VIDEO = PROJECT_ROOT + "/alpamayo_outputs/crowd_clips/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_30s.mp4"
-OUTPUT_DIR = PROJECT_ROOT + "/workflow_outputs/gemma_reasoning"
-KEY_FRAME_DIR = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_key_frames"
-GEMMA_GATE_JSON = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_gemma_gate.json"
-GEMMA_PROMPT_JSON = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_gemma_prompt.json"
-GEMMA_COMPAT_JSON = OUTPUT_DIR + "/" + VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)) + "_gemma_reasoning.json"
+OUTPUT_DIR = workflow_path("gemma_reasoning")
+KEY_FRAME_DIR = workflow_path("gemma_reasoning", segment_tag() + "_key_frames")
+GEMMA_GATE_JSON = workflow_path("gemma_reasoning", segment_tag() + "_gemma_gate.json")
+GEMMA_PROMPT_JSON = workflow_path("gemma_reasoning", segment_tag() + "_gemma_prompt.json")
+GEMMA_COMPAT_JSON = workflow_path("gemma_reasoning", segment_tag() + "_gemma_reasoning.json")
 
 KEY_FRAME_POSITIONS = [0.25, 0.50, 0.75]
 GEMMA_MODE = "dry_run_placeholder"
@@ -42,10 +44,8 @@ GEMMA4_MAX_NEW_TOKENS = 320
 
 
 def make_dirs():
-    if not os.path.isdir(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-    if not os.path.isdir(KEY_FRAME_DIR):
-        os.makedirs(KEY_FRAME_DIR)
+    ensure_dir(OUTPUT_DIR)
+    ensure_dir(KEY_FRAME_DIR)
 
 
 def extract_key_frames():
@@ -114,34 +114,54 @@ def passenger_text_for(display_target, action):
 
 
 GEMMA_SYSTEM_PROMPT = (
-    "You are the explanation-timing gate for an autonomous vehicle's passenger "
-    "interface. You receive the AV planner's (Alpamayo) current output plus a key "
-    "frame. Decide whether THIS moment genuinely warrants a brief on-screen "
-    "explanation of the vehicle's behaviour.\n\n"
-    "Explanations must be RARE. The DEFAULT is do_not_explain. Explain only when "
-    "ALL of the following hold: (1) the vehicle is taking a noticeable action "
-    "(slowing, yielding, stopping, or swerving); (2) the CAUSE is not obvious "
-    "from the passenger's own view; and (3) the situation is unexpected or "
-    "safety-critical in a way the passenger would not already understand. If you "
-    "are not clearly convinced an explanation adds real value, return false.\n\n"
-    "Treat these as OBVIOUS -> do_not_explain (even if safety-relevant):\n"
-    "- yielding, slowing, or stopping for pedestrians at a MARKED or signalised "
-    "crosswalk;\n"
-    "- stopping at a clearly visible red light or stop sign;\n"
-    "- normal car-following, lane keeping, or routine speed changes;\n"
-    "- an empty or clear road ahead;\n"
-    "- people who are on the sidewalk or otherwise NOT in the vehicle's path.\n\n"
-    "Explain (proper_time_to_explain = true) ONLY for a genuinely non-obvious, "
-    "in-path hazard, for example:\n"
-    "- a pedestrian or cyclist who has moved INTO the vehicle's own driving lane "
-    "away from any crossing (jaywalking into the path);\n"
-    "- a road user or object emerging suddenly from occlusion into the path;\n"
-    "- an ambiguous conflict where the reason for the manoeuvre is genuinely "
-    "unclear.\n\n"
-    "If the planner reports a clear road or routine driving, return false. When "
-    "in any doubt, return false.\n\n"
+    "You are the explanation timing gate for OptiCarVis, an autonomous vehicle "
+    "passenger interface. You receive Alpamayo planner context and selected scene "
+    "frames. Your task is to decide whether THIS moment is a proper time to "
+    "trigger a brief passenger facing visual explanation.\\n\\n"
+    "DEFAULT DECISION: do_not_explain. Usually no explanation is required. The "
+    "vehicle should not explain standard driving behaviour just because Alpamayo "
+    "detects an action, a traffic interaction, or a nearby road user.\\n\\n"
+    "Say proper_time_to_explain=true only when ALL of these are true:\\n"
+    "1. The vehicle behaviour may be noticeable or potentially confusing to the "
+    "passenger.\\n"
+    "2. The reason for the behaviour is not self evident from normal traffic "
+    "rules or obvious visible motion.\\n"
+    "3. A visual explanation would clarify a specific hidden, ambiguous, distant, "
+    "or safety relevant cause, object, area, or risk in the scene.\\n"
+    "4. The explanation would help the passenger understand why the vehicle is "
+    "behaving this way now.\\n\\n"
+    "Valid reasons for explaining are limited to:\\n"
+    "- a hidden or partially occluded cause, such as a pedestrian, cyclist, "
+    "vehicle, queue, obstacle, or hazard that is not immediately obvious;\\n"
+    "- ambiguous intent of another road user, for example someone may enter the "
+    "ego path but has not clearly done so yet;\\n"
+    "- a non local cause, such as a downstream queue, blocked lane, roadworks, or "
+    "hazard farther ahead;\\n"
+    "- unusual safety margin behaviour, for example slowing early, stopping "
+    "early, hesitating, or keeping extra distance because of uncertainty;\\n"
+    "- behaviour that may feel surprising from inside the vehicle, such as not "
+    "proceeding when the path appears open.\\n\\n"
+    "Say do_not_explain for standard or self evident driving behaviour, "
+    "including:\\n"
+    "- ordinary car following;\\n"
+    "- slowing because the lead vehicle is slow;\\n"
+    "- normal merging or cut in interactions when the cause is visible;\\n"
+    "- normal traffic light behaviour;\\n"
+    "- normal lane keeping or lane adjustment;\\n"
+    "- normal yielding when the reason is obvious;\\n"
+    "- normal stopping behind traffic;\\n"
+    "- explanations that would merely restate what the passenger can already "
+    "see.\\n\\n"
+    "Important constraints:\\n"
+    "- Do not explain just because the action is stop, slow, yield, nudge, turn, "
+    "or continue.\\n"
+    "- Do not explain just because there is a pedestrian, cyclist, traffic light, "
+    "merging vehicle, cut in vehicle, or lead vehicle.\\n"
+    "- Only explain when visual grounding adds useful information beyond the "
+    "obvious scene interpretation.\\n"
+    "- If uncertain, choose do_not_explain.\\n\\n"
     "Respond with ONLY a single minified JSON object, no prose and no markdown, "
-    "with exactly these keys:\n"
+    "with exactly these keys:\\n"
     '{"proper_time_to_explain": true|false, '
     '"decision": "explain_now"|"do_not_explain", '
     '"decision_reason": "<short technical reason>", '
@@ -345,7 +365,7 @@ def build_prompt(state, frame_payload):
     context = state.get("alpamayo_context", {})
     prompt = {
         "task": "Decide whether this is a proper time for an AV to explain its behaviour to a passenger.",
-        "instruction": "Do not explain every behaviour change. Explain only if the behaviour is non obvious, safety relevant, ambiguous, or useful for passenger trust.",
+        "instruction": "Default to do_not_explain. Explain only when the vehicle behaviour is noticeable or potentially confusing and visual grounding would clarify a hidden, ambiguous, non local, or unusual safety margin reason beyond what the passenger can already see.",
         "alpamayo_context": {
             "action": context.get("alpamayo_action"),
             "reasoning_trace": context.get("alpamayo_reasoning_trace"),
@@ -371,33 +391,82 @@ def dry_run_gate(state, prompt):
     action = context.get("alpamayo_action", "continue")
     scene_cause = context.get("scene_cause", "unclassified_driving_context")
     uncertainty = float(context.get("uncertainty_score", 0.0))
+    reasoning = str(context.get("alpamayo_reasoning_trace") or "").lower()
     candidate = bool(context.get("candidate_context", False))
 
-    proper = False
-    reason = "No explanation needed because the behaviour does not appear non obvious or safety relevant."
-    confidence = 0.65
+    hidden_terms = [
+        "occluded",
+        "hidden",
+        "blocked view",
+        "behind",
+        "emerging",
+        "sudden",
+        "not visible",
+        "partially visible",
+    ]
+    ambiguity_terms = [
+        "ambiguous",
+        "uncertain",
+        "may enter",
+        "might enter",
+        "hesitate",
+        "hesitation",
+        "unclear",
+        "unpredictable",
+    ]
+    non_local_terms = [
+        "downstream",
+        "queue ahead",
+        "blocked lane",
+        "roadworks",
+        "construction",
+        "hazard ahead",
+        "farther ahead",
+    ]
+    unusual_margin_terms = [
+        "early braking",
+        "stopping early",
+        "extra distance",
+        "large margin",
+        "safety margin",
+        "path appears open",
+    ]
 
-    if candidate:
-        if scene_cause == "pedestrian_crosswalk_interaction":
-            proper = True
-            reason = "The vehicle is yielding for pedestrians in the crosswalk, which is safety relevant and useful for passenger understanding."
+    has_hidden_cause = any(term in reasoning for term in hidden_terms)
+    has_ambiguity = any(term in reasoning for term in ambiguity_terms)
+    has_non_local_cause = any(term in reasoning for term in non_local_terms)
+    has_unusual_margin = any(term in reasoning for term in unusual_margin_terms)
+
+    noticeable_action = action in ["stop", "slow", "slow_or_yield", "yield", "nudge", "turn"]
+
+    proper = False
+    reason = "No explanation needed because the behaviour appears standard or self evident."
+    confidence = 0.72
+
+    if candidate and noticeable_action and (
+        has_hidden_cause
+        or has_ambiguity
+        or has_non_local_cause
+        or has_unusual_margin
+        or uncertainty >= 0.82
+    ):
+        proper = True
+        confidence = 0.74
+        if has_hidden_cause:
+            reason = "Explanation may help because the relevant cause appears hidden or partially occluded."
             confidence = 0.78
-        elif scene_cause == "traffic_light_interaction" and action == "stop":
-            proper = False
-            reason = "Stopping for a clearly visible traffic light may be obvious, so an explanation is not always necessary."
-            confidence = 0.70
-        elif uncertainty >= 0.75:
-            proper = True
-            reason = "Alpamayo context is uncertain enough that a passenger explanation may be useful."
+        elif has_ambiguity:
+            reason = "Explanation may help because another road user's intent is ambiguous."
+            confidence = 0.75
+        elif has_non_local_cause:
+            reason = "Explanation may help because the cause is downstream or not local to the immediate scene."
+            confidence = 0.75
+        elif has_unusual_margin:
+            reason = "Explanation may help because the vehicle is using an unusual safety margin."
+            confidence = 0.74
+        else:
+            reason = "Explanation may help because the planner reports high uncertainty in a noticeable action."
             confidence = 0.72
-        elif action in ["nudge", "turn"]:
-            proper = True
-            reason = "The vehicle changes path or direction, which may not be obvious to the passenger."
-            confidence = 0.70
-        elif action == "slow_or_yield" and uncertainty >= 0.60:
-            proper = True
-            reason = "The vehicle slows or yields in a potentially ambiguous context."
-            confidence = 0.70
 
     if proper:
         target = display_target_for(scene_cause, action)
@@ -423,7 +492,7 @@ def dry_run_gate(state, prompt):
         "confidence": confidence,
         "alpamayo_context_used": prompt.get("alpamayo_context", {}),
         "selected_scene_frames": prompt.get("selected_scene_frames", []),
-        "important_note": "Dry run gate with the same JSON contract expected from real Gemma4.",
+        "important_note": "Dry run fallback following the same conservative gate policy expected from real Gemma4.",
     }
 
 

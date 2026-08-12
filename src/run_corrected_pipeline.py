@@ -1,14 +1,14 @@
 r"""Run one OptiCarVis clip job.
 
-This is the single-job entry point. It is job aware through pipeline_common.py.
-The batch runner calls this file repeatedly with environment variables for each
-city/video/start-time job.
+This is the single job entry point. It is job aware through pipeline_common.py.
+The batch runner calls this file with environment variables for each
+city, video, and start time job.
 
 Order:
 1. Alpamayo context extraction.
 2. Gemma4 gate decides whether this is a proper time to explain.
 3. If Gemma4 says no, stop.
-4. If Gemma4 says yes, run segmentation, depth, MIRAGE planning and render.
+4. If Gemma4 says yes, run segmentation, depth, MIRAGE planning, and render.
 """
 
 import json
@@ -28,11 +28,11 @@ from pipeline_common import (
 )
 
 
-OPTICARVIS_ROOT = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def run_step(script_name):
-    script_path = OPTICARVIS_ROOT + "/" + script_name
+    script_path = os.path.join(SRC_DIR, script_name)
 
     if not os.path.isfile(script_path):
         print("Missing script:", script_path)
@@ -45,7 +45,7 @@ def run_step(script_name):
 
     subprocess.run(
         [sys.executable, script_path],
-        cwd=OPTICARVIS_ROOT,
+        cwd=SRC_DIR,
         check=True,
     )
 
@@ -79,6 +79,23 @@ def print_job_header():
     print("MIRAGE runs only if Gemma4 says yes.")
 
 
+def print_final_video(outputs):
+    keys = [
+        "roadline_v3_final_preview_video",
+        "roadline_v3_final_preview_video_vehicles",
+        "clean_final_preview_video",
+        "final_preview_video",
+    ]
+
+    for key in keys:
+        value = outputs.get(key)
+        if value:
+            print("Final video:", value)
+            return
+
+    print("Final video: not found in workflow state outputs")
+
+
 def main():
     print_job_header()
 
@@ -94,6 +111,7 @@ def main():
         print("Gemma4 gate said NO.")
         print("No segmentation, depth, MIRAGE or rendering will run.")
         print("Reason:", explanation.get("decision_reason", ""))
+        print("State JSON:", STATE_JSON)
         return
 
     print("")
@@ -111,13 +129,7 @@ def main():
     print("")
     print("Pipeline complete.")
     print("State JSON:", STATE_JSON)
-
-    if outputs.get("clean_final_preview_video"):
-        print("Final video:", outputs.get("clean_final_preview_video"))
-    elif outputs.get("roadline_v3_final_preview_video"):
-        print("Final video:", outputs.get("roadline_v3_final_preview_video"))
-    elif outputs.get("final_preview_video"):
-        print("Final video:", outputs.get("final_preview_video"))
+    print_final_video(outputs)
 
 
 if __name__ == "__main__":

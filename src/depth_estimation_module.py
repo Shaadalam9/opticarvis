@@ -17,7 +17,7 @@ Later upgrade:
     Metric3D, ZoeDepth, or another selected model.
 
 Run from the single OptiCarVis uv venv:
-    cd C:\Users\localadmin\Desktop\Shadab\opticarvis
+    cd C:\Users\localadmin\Desktop\Shadab\opticarvis\src
     C:\Users\localadmin\Desktop\Shadab\opticarvis\.venv\Scripts\python.exe depth_estimation_module.py
 """
 
@@ -28,12 +28,15 @@ import cv2
 import numpy as np
 
 from pipeline_common import (
-    PROJECT_ROOT,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
+    STATE_JSON,
     read_json,
     write_json,
     clamp,
+    ensure_dir,
+    segment_tag,
+    workflow_path,
 )
 
 # Use the real monocular depth model (Depth Anything V2 via scene_models) instead
@@ -41,39 +44,15 @@ from pipeline_common import (
 USE_REAL_DEPTH = True
 _real_depth_ok = None
 
-STATE_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_workflow_state.json"
-)
+SEGMENTATION_JSON = workflow_path("segmentation", segment_tag() + "_segmentation.json")
 
-SEGMENTATION_JSON = (
-    PROJECT_ROOT
-    + "/workflow_outputs/segmentation/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_segmentation.json"
-)
+OUTPUT_DIR = workflow_path("depth")
 
-OUTPUT_DIR = PROJECT_ROOT + "/workflow_outputs/depth"
-
-OUTPUT_JSON = (
-    OUTPUT_DIR
-    + "/"
-    + VIDEO_ID
-    + "_"
-    + str(int(SEGMENT_START_TIME_S))
-    + "_depth.json"
-)
+OUTPUT_JSON = workflow_path("depth", segment_tag() + "_depth.json")
 
 
 def create_dirs():
-    if not os.path.isdir(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    ensure_dir(OUTPUT_DIR)
 
 
 def get_requested_target_classes(segmentation_payload):
