@@ -216,20 +216,56 @@ source .venv/bin/activate
 > **Note** — on Blackwell / `sm_120` GPUs install a CUDA 12.8 PyTorch build into the
 > synced environment, otherwise CUDA kernels will fail to launch.
 
-### Optional: lane detection (UFLDv2)
+### Directory layout
 
-Ego-lane centring needs the UFLDv2 repository and its CULane weights, which are not
-vendored here (the checkpoint is ~865 MB, and model weights are gitignored):
+Every path is derived from the repository root, so a fresh clone needs no path edits.
+Three directories are **gitignored and not present after cloning**:
 
-```bash
-git clone --depth 1 https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2.git ../UFLDv2
-uv pip install gdown addict pathspec
-python -c "import gdown; gdown.download(id='1AjnvAD3qmqt_dGPveZJsLZ1bOyWv62Yj', output='../UFLDv2/culane_res34.pth')"
-export OPTICARVIS_UFLD_REPO=../UFLDv2
+```
+opticarvis/
+    src/                  pipeline code (tracked)
+    videos/               source dashcam videos          <- you provide
+    mapping.csv           clip index (tracked)
+    external/             upstream checkouts             <- you clone, see below
+        alpamayo/
+        oom-free-alpamayo/
+        UFLDv2/
+    alpamayo_outputs/     extracted clips + planner JSON <- created by the pipeline
+    workflow_outputs/     renders, timelines, state      <- created by the pipeline
 ```
 
-Without this the renderer still runs: it reports that the lane model is unavailable
-and keeps the ribbon straight ahead in the lane.
+`alpamayo_outputs/` and `workflow_outputs/` are created on demand — nothing to do.
+They are ignored because they hold multi-gigabyte video artefacts. `videos/` is
+ignored for the same reason; the batch runner will fetch missing source videos over
+FTP when credentials are configured.
+
+### External repositories
+
+The pipeline shells out to two upstream checkouts and loads a third as a library.
+None are vendored — clone them into `external/`, which is where every default path
+looks:
+
+```bash
+mkdir -p external
+git clone --depth 1 https://github.com/NVlabs/alpamayo.git external/alpamayo
+git clone --depth 1 https://github.com/aveeslab/oom-free-alpamayo.git external/oom-free-alpamayo
+git clone --depth 1 https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2.git external/UFLDv2
+```
+
+Only `batch_corrected_pipeline.py` needs the two Alpamayo checkouts, and only to
+generate planner JSON; rendering from existing JSON does not. Each location is
+overridable — see [Configuration](#configuration).
+
+**Lane detection weights (optional).** Ego-lane centring needs the UFLDv2 CULane
+checkpoint, which is ~865 MB and gitignored:
+
+```bash
+uv pip install gdown addict pathspec
+python -c "import gdown; gdown.download(id='1AjnvAD3qmqt_dGPveZJsLZ1bOyWv62Yj', output='external/UFLDv2/culane_res34.pth')"
+```
+
+Without it the renderer still runs: it reports that the lane model is unavailable and
+keeps the ribbon straight ahead in the lane.
 
 ## Running the pipeline
 
@@ -274,7 +310,14 @@ needs no code edits.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OPTICARVIS_PROJECT_ROOT` | local path | Root containing `workflow_outputs/` |
+| `OPTICARVIS_PROJECT_ROOT` | the repo root (from `__file__`) | Base for every path below |
+| `OPTICARVIS_VIDEOS_DIR` | `<root>/videos` | Source dashcam videos |
+| `OPTICARVIS_WORKFLOW_OUTPUTS` | `<root>/workflow_outputs` | Renders, timelines, workflow state |
+| `OPTICARVIS_ALPAMAYO_OUTPUTS` | `<root>/alpamayo_outputs` | Extracted clips and planner JSON |
+| `OPTICARVIS_EXTERNAL_DIR` | `<root>/external` | Parent of the upstream checkouts |
+| `OPTICARVIS_ALPAMAYO_REPO` | `<external>/alpamayo` | NVlabs Alpamayo checkout |
+| `OPTICARVIS_OOM_FREE_ALPAMAYO_REPO` | `<external>/oom-free-alpamayo` | Checkout providing `infer_crowd_clip.py` |
+| `OPTICARVIS_UFLDV2_DIR` | `<external>/UFLDv2` | UFLDv2 checkout |
 | `OPTICARVIS_VIDEO_ID` | `TuCsyBF3nHU` | Clip identity for per-clip artefacts |
 | `OPTICARVIS_SEGMENT_START_S` | `4630` | Segment start, used in artefact names |
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |

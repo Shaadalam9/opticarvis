@@ -225,6 +225,14 @@ secret
 _output
 videos
 
+# vendored upstream checkouts (cloned by the user - see README "External repositories")
+external/
+
+# pipeline artefacts: Alpamayo clips/JSON in, renders and state out.
+# Both are recreated by the pipeline and run to gigabytes.
+alpamayo_outputs/
+workflow_outputs/
+
 # script backups (set_external_signal_csv.py)
 *.bak
 *.py.before_external_signal_backup.py

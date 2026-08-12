@@ -26,11 +26,13 @@ user-facing description; **this file is for you, the agent working on the code.*
   mmcv/mmdet (e.g. CLRerNet) is effectively unusable here without a source
   build; that is why UFLDv2 (pure PyTorch) was chosen for lanes. Do not
   re-attempt mmcv-based models without a source-build plan.
-- **UFLDv2 is vendored OUTSIDE this repo** at `../UFLDv2` with weights
-  `culane_res34.pth` (~865 MB, gdown id `1AjnvAD3qmqt_dGPveZJsLZ1bOyWv62Yj`);
-  override via `OPTICARVIS_UFLD_REPO` / `OPTICARVIS_UFLD_WEIGHTS`. Its
-  training-only imports (nvidia-dali, tensorboard) are stubbed in
-  `src/scene_models.py: load_lane_instance_model` — keep it that way.
+- **Upstream checkouts live in `external/`** (gitignored, cloned per install):
+  `external/alpamayo`, `external/oom-free-alpamayo`, `external/UFLDv2`. UFLDv2
+  needs weights `culane_res34.pth` (~865 MB, gdown id
+  `1AjnvAD3qmqt_dGPveZJsLZ1bOyWv62Yj`); override via `OPTICARVIS_UFLD_REPO` /
+  `OPTICARVIS_UFLD_WEIGHTS`. Its training-only imports (nvidia-dali,
+  tensorboard) are stubbed in `src/scene_models.py: load_lane_instance_model` —
+  keep it that way.
 - Model weights (`*.pt`, `*.pth`) are **gitignored**; never commit them.
 - `ffmpeg` must be on PATH for the H.264 delivery encode (the render degrades to
   the mp4v master with a warning if missing).
@@ -47,7 +49,16 @@ src/        the AV visualisation pipeline (run scripts from here: `python src/<s
 docs/       README figures + ENGINEERING.md
 *.py (root) the separate mobility-study code (policy_demo, common, logmod, ...) - it
             resolves `config`/`secret` next to itself, so it must stay at the root
+
+external/           gitignored upstream checkouts (alpamayo, oom-free-alpamayo, UFLDv2)
+videos/             gitignored source dashcam videos
+alpamayo_outputs/   gitignored: extracted clips + planner JSON (created by the pipeline)
+workflow_outputs/   gitignored: renders, timelines, state (created by the pipeline)
 ```
+
+Every path resolves from `PROJECT_ROOT`, which `src/pipeline_common.py` derives
+from its own `__file__` — **never reintroduce an absolute local path**. Each
+directory above has an `OPTICARVIS_*` override; see the README Configuration table.
 
 ## Repo map
 
@@ -63,9 +74,9 @@ docs/       README figures + ENGINEERING.md
 | `src/pipeline_common.py` | Paths, env-overridable clip selection, `transcode_h264`, `clip_stem` |
 | `docs/ENGINEERING.md` | Measured evidence behind every geometry/tracking decision |
 
-Outputs land in `<PROJECT_ROOT>/workflow_outputs/final_renders/` — **outside the
-repo**; videos are never committed. Filenames derive from the rendered clip
-(`clip_stem`), so clips cannot overwrite each other.
+Outputs land in `<PROJECT_ROOT>/workflow_outputs/final_renders/` — inside the repo
+but **gitignored**; videos are never committed. Filenames derive from the rendered
+clip (`clip_stem`), so clips cannot overwrite each other.
 
 ## How to render
 
