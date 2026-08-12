@@ -34,6 +34,15 @@ user-facing description; **this file is for you, the agent working on the code.*
   tensorboard) are stubbed in `src/scene_models.py: load_lane_instance_model` —
   keep it that way.
 - Model weights (`*.pt`, `*.pth`) are **gitignored**; never commit them.
+- **Editing `pyproject.toml` dependencies means running `uv lock` in the same
+  commit.** `uv sync --frozen` does *not* fail on a stale lock — it silently
+  under-installs, so a forgotten re-lock ships an environment missing packages
+  with no error anywhere. Verified against uv 0.11.7.
+- **PyPI's Windows `torch` wheel is CPU-only** (its CUDA deps are gated on
+  `sys_platform == 'linux'`). `pyproject.toml` routes Windows to the cu128 index
+  for that reason; do not "simplify" it back to a plain PyPI dependency, and do
+  not extend the cu128 pin to Linux `aarch64` — those wheels exist, so it would
+  resolve cleanly while giving DGX Spark (sm_121) a CUDA 12.8 build.
 - `ffmpeg` must be on PATH for the H.264 delivery encode (the render degrades to
   the mp4v master with a warning if missing).
 - The Gemma gate model is `google/gemma-4-E2B-it` — **E2B, not E4B**: E4B does

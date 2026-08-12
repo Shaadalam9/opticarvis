@@ -12,4 +12,30 @@ dependencies = [
     "pycountry>=26.2.16",
     "requests>=2.34.2",
     "tqdm>=4.67.3",
+    # AV pipeline (src/). Floors are the versions the pipeline is known to run
+    # on; uv.lock pins the exact build, so `uv sync --frozen` is reproducible.
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "transformers>=5.14.1",
+    "ultralytics>=8.4.103",
 ]
+
+# PyPI ships a CPU-only torch wheel for Windows -- its win_amd64 wheel carries
+# no CUDA dependencies at all (they are gated on sys_platform == 'linux'). A
+# plain PyPI torch would therefore silently downgrade this project to CPU on
+# the Windows dev machine, so Windows is pointed at the CUDA 12.8 index, which
+# is what an RTX 5080 (Blackwell, sm_120) needs.
+#
+# Linux is deliberately left on PyPI, and NOT because the cu128 index lacks ARM
+# builds -- it does publish manylinux_2_28_aarch64 wheels, which is precisely
+# what makes pinning them dangerous: it would resolve cleanly and look correct
+# while installing a CUDA 12.8 build. From torch 2.11.0 the PyPI Linux wheels
+# are CUDA 13.0 builds, which is what an sm_121 part (DGX Spark / GB10) wants.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]

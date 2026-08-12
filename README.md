@@ -225,10 +225,33 @@ batch runner itself is driven from Windows.
 
 - Python **3.12**, [`uv`](https://docs.astral.sh/uv/)
 - An NVIDIA GPU is strongly recommended — the renderer runs four models per frame.
-  Developed on an RTX 5080 (Blackwell, `sm_120`), which requires a **CUDA 12.8**
-  PyTorch build.
+  Developed on an RTX 5080 (Blackwell, `sm_120`), which needs a **CUDA 12.8** build
+  of PyTorch. `uv sync` handles this; see below.
 - `ffmpeg` on `PATH` for the H.264 delivery encode. Without it the render still
   completes and keeps the `mp4v` master, with a warning.
+
+### How PyTorch is resolved
+
+PyPI's Windows `torch` wheel is **CPU-only** — its CUDA dependencies are gated on
+`sys_platform == 'linux'`, so a plain PyPI install silently yields a CPU build and
+every CUDA kernel launch fails. `pyproject.toml` therefore routes Windows to the
+CUDA 12.8 index while leaving Linux on PyPI, whose wheels do bundle CUDA for both
+`x86_64` and `aarch64`:
+
+| Platform | Resolves to | CUDA |
+|---|---|---|
+| Windows `x86_64` | `torch 2.11.0+cu128` from `download.pytorch.org/whl/cu128` | 12.8 |
+| Linux `x86_64` / `aarch64` | `torch 2.13.0` from PyPI | 13.0 (bundled) |
+
+Nothing extra to install — `uv sync --frozen` is enough on both.
+
+Linux is left on PyPI **on purpose**, and not because the CUDA 12.8 index lacks ARM
+builds — it does publish `manylinux_2_28_aarch64` wheels. That is exactly what makes
+the alternative dangerous: pinning `aarch64` to `cu128` would resolve *cleanly* and
+look correct, while installing a CUDA 12.8 build. From torch 2.11.0 onward the PyPI
+Linux wheels are **CUDA 13.0** builds, which is what an **sm_121** part such as DGX
+Spark's GB10 wants. Sending Spark to the `cu128` index would silently hand it
+kernels built for the wrong architecture generation.
 
 ## Getting started
 
@@ -261,8 +284,8 @@ source .venv/bin/activate
 .\.venv\Scripts\Activate.ps1
 ```
 
-> **Note** — on Blackwell / `sm_120` GPUs install a CUDA 12.8 PyTorch build into the
-> synced environment, otherwise CUDA kernels will fail to launch.
+This installs the full pipeline, PyTorch included — see
+[How PyTorch is resolved](#how-pytorch-is-resolved) for what each platform gets.
 
 ### Directory layout
 
