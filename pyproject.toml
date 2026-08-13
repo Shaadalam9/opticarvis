@@ -24,6 +24,9 @@ dependencies = [
     "torchvision>=0.26.0",
     "transformers>=5.14.1",
     "ultralytics>=8.4.103",
+    "scikit-learn>=1.9.0",
+    "accelerate>=1.14.0",
+    "physical-ai-av>=0.2.2",
 ]
 
 # PyPI ships a CPU-only torch wheel for Windows -- its win_amd64 wheel carries

@@ -1,12 +1,11 @@
-# Byte-compiled / optimized / DLL files
+# Python bytecode
 __pycache__/
-*.py[codz]
+*.py[cod]
 *$py.class
-
-# C extensions
+*.pyd
 *.so
 
-# Distribution / packaging
+# Python build and packaging
 .Python
 build/
 develop-eggs/
@@ -27,218 +26,160 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#   Usually these files are written by a python script from a template
-#   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
+# Test, coverage and cache files
 htmlcov/
 .tox/
 .nox/
 .coverage
 .coverage.*
-.cache
+.cache/
+.pytest_cache/
+.hypothesis/
+cover/
 nosetests.xml
 coverage.xml
 *.cover
 *.py.cover
-.hypothesis/
-.pytest_cache/
-cover/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-# Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-# uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-# poetry.lock
-# poetry.toml
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-# pdm.lock
-# pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-# pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# Redis
-*.rdb
-*.aof
-*.pid
-
-# RabbitMQ
-mnesia/
-rabbitmq/
-rabbitmq-data/
-
-# ActiveMQ
-activemq-data/
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-.DS_Store
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# Type checker and linter caches
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static type analyzer
 .pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#   and can be added to the global gitignore or merged into this file.  For a more nuclear
-#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
-
-# Abstra
-#   Abstra is an AI-powered process automation framework.
-#   Ignore directories containing user credentials, local state, and settings.
-#   Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-# Temporary file for partial code execution
-tempCodeRunnerFile.py
-
-# Ruff stuff:
 .ruff_cache/
 
-# PyPI configuration file
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+__pypackages__/
+.pdm-python
+.pdm-build/
+.pixi/
+
+# Local environment and secrets
+.env
+.env.*
+.envrc
 .pypirc
+.streamlit/secrets.toml
+
+# OptiCarVis local secret/config files
+/config
+/secret
+secrets/
+secrets.*
+*secret*.json
+*secret*.toml
+*secret*.yaml
+*secret*.yml
+*credentials*.json
+*credentials*.toml
+*.key
+*.pem
+
+# Keep these tracked
+!default.config
+!default.secret
+
+# Logs
+*.log
+logs/
+
+# Local databases
+db.sqlite3
+db.sqlite3-journal
+
+# Jupyter and notebooks
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# Documentation build outputs
+docs/_build/
+/site
+
+# Local IDE and OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+.spyderproject
+.spyproject
+.ropeproject
+tempCodeRunnerFile.py
 
 # Marimo
 marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Streamlit
-.streamlit/secrets.toml
+# Abstra local state
+.abstra/
 
+# Large source videos
+videos/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
 
-# instance files
-config
-secret
-_output
-videos
-
-# vendored upstream checkouts (cloned by the user - see README "External repositories")
-external/
-
-# pipeline artefacts: Alpamayo clips/JSON in, renders and state out.
-# Both are recreated by the pipeline and run to gigabytes.
+# Generated OptiCarVis outputs
 alpamayo_outputs/
 workflow_outputs/
+outputs/
 
-# script backups (set_external_signal_csv.py)
+# Generated batch files and manifests
+clip_jobs.jsonl
+clip_jobs_summary.json
+master_clip_index.jsonl
+alpamayo_manifest_*.csv
+
+# External repositories
+# These are cloned locally by the user and should not be pushed as vendored source.
+external/
+
+# Model weights and ML artefacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.engine
+*.gguf
+*.h5
+*.pb
+
+# Model and dataset caches
+huggingface/
+transformers_cache/
+torch_cache/
+ultralytics/
+runs/
+
+# Video and rendering scratch files
+frames/
+preview_frames/
+render_cache/
+tmp/
+temp/
+scratch/
+
+# Script backups
 *.bak
 *.py.before_external_signal_backup.py
 
-# model weights (re-downloaded on first use; up to ~140 MB each)
-# YOLO26/YOLO11 segmentation checkpoints, UFLDv2 lane weights.
-*.pt
-*.pth
-.DS_Store
+# Windows recycle and temporary files
+$RECYCLE.BIN/
+*.tmp
+*.temp
