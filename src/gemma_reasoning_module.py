@@ -334,6 +334,46 @@ def gate_from_model_output(parsed, state, raw_text):
     }
 
 
+
+def flatten_gemma_messages_for_processor(messages):
+    """Convert role/content messages to plain text plus image list for processors without chat templates."""
+    text_blocks = []
+    images = []
+
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        content = message.get("content", [])
+        parts = []
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type")
+
+            if item_type == "text":
+                value = str(item.get("text", "")).strip()
+                if value:
+                    parts.append(value)
+
+            elif item_type == "image":
+                image = item.get("image")
+                if image is not None:
+                    images.append(image)
+                    parts.append("<|image|>")
+
+        if parts:
+            text_blocks.append(role + ":\n" + "\n".join(parts))
+
+    text_blocks.append(
+        "ASSISTANT:\n"
+        "Return exactly one minified JSON object. "
+        "Do not include markdown, explanation text, or code fences."
+    )
+
+    return "\n\n".join(text_blocks), images
+
+
 def run_gemma4_gate(state, frames):
     """Run the real Gemma 4 gate; return the gate dict, or None to fall back."""
     if not USE_REAL_GEMMA:
@@ -343,13 +383,24 @@ def run_gemma4_gate(state, frames):
 
         processor, model = load_gemma4()
         messages = build_gemma_messages(state, frames)
-        inputs = processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt",
-        ).to(model.device)
+        if getattr(processor, "chat_template", None):
+            inputs = processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            ).to(model.device)
+        else:
+            prompt_text, prompt_images = flatten_gemma_messages_for_processor(messages)
+            processor_kwargs = {
+                "text": prompt_text,
+                "return_tensors": "pt",
+            }
+            if prompt_images:
+                processor_kwargs["images"] = prompt_images
+
+            inputs = processor(**processor_kwargs).to(model.device)
         input_len = inputs["input_ids"].shape[-1]
         with torch.no_grad():
             output = model.generate(
