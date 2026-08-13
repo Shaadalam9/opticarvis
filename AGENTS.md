@@ -34,6 +34,22 @@ user-facing description; **this file is for you, the agent working on the code.*
   tensorboard) are stubbed in `src/scene_models.py: load_lane_instance_model` —
   keep it that way.
 - Model weights (`*.pt`, `*.pth`) are **gitignored**; never commit them.
+- **VO forward speed is unrecoverable on the dense-traffic clips, and this is a
+  scene limitation, not a bug.** Measured at frame 800 of
+  `Esyp2P0uJu4_1056_30s.mp4`: median vertical optical flow in GROUND_BAND is
+  **-0.3 px** where 30 km/h needs +3-4 px, p90 |dv| < 1 px. In a queue moving
+  with the ego car the lead vehicle has near-zero relative motion, and the road
+  that would carry the signal is both occluded and texture-poor. Masking
+  features to segmented road was **tried and made it worse** (total path 6.0 m
+  -> 3.2 m, heading -1.2 deg -> -14 deg) because asphalt yields fewer and weaker
+  corners than vehicle edges. Do not re-attempt road masking or recalibration
+  for this; calibration converts flow to metres, it cannot create flow. Speed
+  has to come from another cue (GPS/metadata, or lane/crosswalk markings) or be
+  accepted as unavailable. Note `median_speed_kmh` is a MEDIAN, so 0.0 is also
+  the honest answer for a car stopped more than half the clip.
+- `tests/test_calibration_scaling.py` guards the resolution scaling; run it
+  after touching any pixel constant in the renderer. No GPU or clip needed.
+- `scripts/alpamayo2_preflight.py` checks a host before the 68 GB download.
 - **Editing `pyproject.toml` dependencies means running `uv lock` in the same
   commit.** `uv sync --frozen` does *not* fail on a stale lock — it silently
   under-installs, so a forgotten re-lock ships an environment missing packages

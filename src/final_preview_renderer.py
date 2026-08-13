@@ -198,6 +198,12 @@ PANEL_PADDING_Y_PX = 12
 LABEL_FONT_SCALE = 0.5            # per-object distance labels
 LABEL_OUTLINE_THICKNESS = 3
 LABEL_TEXT_THICKNESS = 1
+GUIDE_LINE_THICKNESS = 1          # --calibrate overlay: horizon rule
+GUIDE_VP_RADIUS_PX = 4            # vanishing-point marker
+GUIDE_TICK_RADIUS_PX = 3          # metre distance ticks
+GUIDE_LABEL_OFFSET_PX = 8         # tick label offset
+GUIDE_FONT_SCALE = 0.5
+GUIDE_TEXT_THICKNESS = 1
 
 # Area-like thresholds: these count PIXELS inside a region whose height and
 # width both grow with s, so they scale by s squared, not s.
@@ -446,6 +452,8 @@ RESOLUTION_SCALED_PX = (
     "RAIL_STROKE_PX", "PANEL_FONT_SCALE", "PANEL_TEXT_THICKNESS",
     "PANEL_MARGIN_PX", "PANEL_PADDING_X_PX", "PANEL_PADDING_Y_PX",
     "LABEL_FONT_SCALE", "LABEL_OUTLINE_THICKNESS", "LABEL_TEXT_THICKNESS",
+    "GUIDE_LINE_THICKNESS", "GUIDE_VP_RADIUS_PX", "GUIDE_TICK_RADIUS_PX",
+    "GUIDE_LABEL_OFFSET_PX", "GUIDE_FONT_SCALE", "GUIDE_TEXT_THICKNESS",
 )
 
 RESOLUTION_SCALED_AREA = ("AIM_MIN_MASK_PX", "FIT_DEPTH_MIN_ROAD_PX")
@@ -463,6 +471,8 @@ RESOLUTION_INT_NAMES = RESOLUTION_ODD_KERNELS + (
     "CONTOUR_THICKNESS", "RAIL_STROKE_PX", "LANE_SCAN_BOTTOM_MARGIN_PX", "LANE_DILATE_PX",
     "PANEL_TEXT_THICKNESS", "PANEL_MARGIN_PX", "PANEL_PADDING_X_PX",
     "PANEL_PADDING_Y_PX", "LABEL_OUTLINE_THICKNESS", "LABEL_TEXT_THICKNESS",
+    "GUIDE_LINE_THICKNESS", "GUIDE_VP_RADIUS_PX", "GUIDE_TICK_RADIUS_PX",
+    "GUIDE_LABEL_OFFSET_PX", "GUIDE_TEXT_THICKNESS",
     "CONTACT_SHADOW_OFFSET_PX",
 ) + RESOLUTION_SCALED_AREA
 
@@ -1532,13 +1542,13 @@ def draw_calibration_guides(frame):
         (0, int(round(HORIZON_V))),
         (width, int(round(HORIZON_V))),
         (0, 0, 255),
-        1,
+        GUIDE_LINE_THICKNESS,
         cv2.LINE_AA,
     )
     cv2.circle(
         frame,
         (int(round(VANISH_U)), int(round(HORIZON_V))),
-        4,
+        GUIDE_VP_RADIUS_PX,
         (0, 0, 255),
         -1,
     )
@@ -1549,15 +1559,15 @@ def draw_calibration_guides(frame):
             continue
         u = int(round(projected[0]))
         v = int(round(projected[1]))
-        cv2.circle(frame, (u, v), 3, (255, 255, 255), -1)
+        cv2.circle(frame, (u, v), GUIDE_TICK_RADIUS_PX, (255, 255, 255), -1)
         cv2.putText(
             frame,
             str(dist) + "m",
-            (u + 8, v),
+            (u + GUIDE_LABEL_OFFSET_PX, v),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            GUIDE_FONT_SCALE,
             (255, 255, 255),
-            1,
+            GUIDE_TEXT_THICKNESS,
             cv2.LINE_AA,
         )
 
