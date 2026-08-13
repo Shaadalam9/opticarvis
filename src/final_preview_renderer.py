@@ -190,6 +190,14 @@ CHEVRON_TANGENT_LOOKBACK_PX = 6.0  # rows back along the centreline used for the
 LABEL_TOP_CLAMP_PX = 18.0         # keep a distance label inside the top edge
 LABEL_ABOVE_BOX_PX = 8.0          # label offset above its box
 RAIL_STROKE_PX = 2                # ribbon rail stroke width
+PANEL_FONT_SCALE = 0.72           # passenger-text panel: cv2 font scale is pixel-space
+PANEL_TEXT_THICKNESS = 2
+PANEL_MARGIN_PX = 24
+PANEL_PADDING_X_PX = 16
+PANEL_PADDING_Y_PX = 12
+LABEL_FONT_SCALE = 0.5            # per-object distance labels
+LABEL_OUTLINE_THICKNESS = 3
+LABEL_TEXT_THICKNESS = 1
 
 # Area-like thresholds: these count PIXELS inside a region whose height and
 # width both grow with s, so they scale by s squared, not s.
@@ -435,7 +443,9 @@ RESOLUTION_SCALED_PX = (
     "LANE_STRADDLE_GUARD_PX", "LANE_WIDTH_FLOOR_PX", "LANE_WIDTH_CEIL_PX",
     "LANE_WIDTH_CONVERGE_PX", "LANE_ROW_TOL_PX", "AIM_CENTRAL_WINDOW_PX",
     "CHEVRON_TANGENT_LOOKBACK_PX", "LABEL_TOP_CLAMP_PX", "LABEL_ABOVE_BOX_PX",
-    "RAIL_STROKE_PX",
+    "RAIL_STROKE_PX", "PANEL_FONT_SCALE", "PANEL_TEXT_THICKNESS",
+    "PANEL_MARGIN_PX", "PANEL_PADDING_X_PX", "PANEL_PADDING_Y_PX",
+    "LABEL_FONT_SCALE", "LABEL_OUTLINE_THICKNESS", "LABEL_TEXT_THICKNESS",
 )
 
 RESOLUTION_SCALED_AREA = ("AIM_MIN_MASK_PX", "FIT_DEPTH_MIN_ROAD_PX")
@@ -451,6 +461,8 @@ RESOLUTION_ODD_KERNELS = (
 
 RESOLUTION_INT_NAMES = RESOLUTION_ODD_KERNELS + (
     "CONTOUR_THICKNESS", "RAIL_STROKE_PX", "LANE_SCAN_BOTTOM_MARGIN_PX", "LANE_DILATE_PX",
+    "PANEL_TEXT_THICKNESS", "PANEL_MARGIN_PX", "PANEL_PADDING_X_PX",
+    "PANEL_PADDING_Y_PX", "LABEL_OUTLINE_THICKNESS", "LABEL_TEXT_THICKNESS",
     "CONTACT_SHADOW_OFFSET_PX",
 ) + RESOLUTION_SCALED_AREA
 
@@ -557,16 +569,16 @@ def draw_text_panel(frame, label_text):
     height, width = frame.shape[:2]
 
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.72
-    thickness = 2
+    font_scale = PANEL_FONT_SCALE
+    thickness = PANEL_TEXT_THICKNESS
 
     text_size, _ = cv2.getTextSize(label_text, font, font_scale, thickness)
     text_width = text_size[0]
     text_height = text_size[1]
 
-    margin = 24
-    padding_x = 16
-    padding_y = 12
+    margin = PANEL_MARGIN_PX
+    padding_x = PANEL_PADDING_X_PX
+    padding_y = PANEL_PADDING_Y_PX
 
     x1 = margin
     y1 = margin
@@ -1841,9 +1853,11 @@ def draw_highlights(frame, selected, close_colour, far_colour, show_class=False)
                 label_x = box[0]
                 label_y = max(int(LABEL_TOP_CLAMP_PX), box[1] - int(LABEL_ABOVE_BOX_PX))
                 cv2.putText(frame, label, (label_x, label_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_BACKGROUND, 3, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, LABEL_FONT_SCALE, TEXT_BACKGROUND,
+                            LABEL_OUTLINE_THICKNESS, cv2.LINE_AA)
                 cv2.putText(frame, label, (label_x, label_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, LABEL_FONT_SCALE, colour,
+                            LABEL_TEXT_THICKNESS, cv2.LINE_AA)
 
     return len(selected)
 
