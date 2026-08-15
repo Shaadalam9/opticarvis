@@ -54,7 +54,7 @@ UFLD_REPO = normalise_path(
     )
 )
 UFLD_WEIGHTS = normalise_path(
-    os.environ.get("OPTICARVIS_UFLD_WEIGHTS", UFLD_REPO + "/culane_res34.pth")
+    os.environ.get("OPTICARVIS_UFLD_WEIGHTS", os.path.join(UFLD_REPO, "culane_res34.pth"))
 )
 UFLD_CFG = {
     "backbone": "34", "num_row": 72, "num_col": 81, "num_cell_row": 200,

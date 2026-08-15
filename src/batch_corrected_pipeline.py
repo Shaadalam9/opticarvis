@@ -16,7 +16,8 @@ This version assumes the consolidated OptiCarVis folder layout:
 It uses the existing OptiCarVis credential mechanism:
 
     VIDEO_BASE_URL   = common.get_configs("VIDEO_BASE_URL")
-    SOURCE_VIDEO_DIR = common.get_configs("videos")
+
+SOURCE_VIDEO_DIR = common.get_configs("videos")
     VIDEO_USERNAME   = common.get_secrets("ftp_username")
     VIDEO_PASSWORD   = common.get_secrets("ftp_password")
 
@@ -33,6 +34,7 @@ The second form runs only 20 jobs.
 The third form starts at zero based job index 100 and runs 20 jobs.
 """
 
+import cv2
 import csv
 import json
 import logging
@@ -79,21 +81,21 @@ logger = logging.getLogger(__name__)
 CLIP_JOBS_JSONL = normalise_path(
     os.environ.get(
         "OPTICARVIS_CLIP_JOBS",
-        WORKFLOW_OUTPUTS + "/clip_jobs.jsonl",
+        os.path.join(WORKFLOW_OUTPUTS, "clip_jobs.jsonl"),
     )
 )
 
 MASTER_INDEX_JSONL = normalise_path(
     os.environ.get(
         "OPTICARVIS_MASTER_CLIP_INDEX",
-        WORKFLOW_OUTPUTS + "/master_clip_index.jsonl",
+        os.path.join(WORKFLOW_OUTPUTS, "master_clip_index.jsonl"),
     )
 )
 
 PIPELINE_SCRIPT = normalise_path(
     os.environ.get(
         "OPTICARVIS_SINGLE_PIPELINE",
-        SRC_DIR + "/run_corrected_pipeline.py",
+        os.path.join(SRC_DIR, "run_corrected_pipeline.py"),
     )
 )
 
@@ -107,7 +109,7 @@ OOM_ALPAMAYO_REPO = normalise_path(
 ALPAMAYO_SCRIPT = normalise_path(
     os.environ.get(
         "OPTICARVIS_ALPAMAYO_SCRIPT",
-        OOM_ALPAMAYO_REPO + "/scripts/infer_crowd_clip.py",
+        os.path.join(OOM_ALPAMAYO_REPO, "scripts", "infer_crowd_clip.py"),
     )
 )
 
@@ -119,6 +121,48 @@ SKIP_EXISTING_STATE = os.environ.get("OPTICARVIS_SKIP_EXISTING_STATE", "0") == "
 
 VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi"]
 DOWNLOAD_MISSING_SOURCE_VIDEOS = True
+
+
+def reset_ftp_video_tmp_dir():
+    if os.path.isdir(FTP_VIDEO_TMP_DIR):
+        shutil.rmtree(FTP_VIDEO_TMP_DIR)
+
+    os.makedirs(FTP_VIDEO_TMP_DIR, exist_ok=True)
+
+
+def atomic_video_download_path(filename_with_ext):
+    final_path = os.path.join(SOURCE_VIDEO_DIR, filename_with_ext)
+    tmp_path = os.path.join(FTP_VIDEO_TMP_DIR, filename_with_ext + ".part")
+
+    return final_path, tmp_path
+
+
+def config_bool(key, default=False):
+    """Read a boolean value from common.get_configs()."""
+    value = common.get_configs(key)
+
+    if value is None:
+        return default
+
+    if isinstance(value, bool):
+        return value
+
+    text_value = str(value).strip().lower()
+
+    if text_value in ["1", "true", "yes", "y", "on"]:
+        return True
+
+    if text_value in ["0", "false", "no", "n", "off"]:
+        return False
+
+    return default
+
+
+DELETE_FTP_VIDEOS_AFTER_USE = config_bool(
+    "DELETE_FTP_VIDEOS_AFTER_USE",
+    False,
+)
+
 FTP_ALIASES = ["tue1", "tue2", "tue3", "tue4", "tue5"]
 FTP_CRAWL_PAGE_LIMIT = 500
 FTP_TIMEOUT_SECONDS = 20
@@ -143,12 +187,14 @@ def as_project_path(path_value):
 
 
 configured_video_dir = common.get_configs("videos")
+
 SOURCE_VIDEO_DIR = normalise_path(
     os.environ.get(
         "OPTICARVIS_SOURCE_VIDEO_DIR",
         as_project_path(configured_video_dir) if configured_video_dir else VIDEOS_DIR,
     )
 )
+FTP_VIDEO_TMP_DIR = os.path.join(SOURCE_VIDEO_DIR, ".tmp")
 
 VIDEO_BASE_URL = common.get_configs("VIDEO_BASE_URL")
 VIDEO_USERNAME = common.get_secrets("ftp_username")
@@ -227,7 +273,7 @@ def read_jobs(path):
 
 def get_video_resolution_label(local_path):
     try:
-        import cv2
+        pass
     except ImportError:
         return "unknown"
 
@@ -244,7 +290,7 @@ def get_video_resolution_label(local_path):
 
 def get_video_fps(local_path):
     try:
-        import cv2
+        pass
     except ImportError:
         return 0.0
 
@@ -259,49 +305,61 @@ def get_video_fps(local_path):
 
 
 def save_video_response(response, filename_with_ext, source_url):
+    final_path, tmp_path = atomic_video_download_path(filename_with_ext)
+
     os.makedirs(SOURCE_VIDEO_DIR, exist_ok=True)
-    local_path = normalise_path(os.path.join(SOURCE_VIDEO_DIR, filename_with_ext))
+    os.makedirs(FTP_VIDEO_TMP_DIR, exist_ok=True)
 
-    if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
-        logger.info("Using already downloaded source video: %s", local_path)
-        return local_path
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
-    total_text = response.headers.get("content-length", "0")
-    total = int(total_text) if str(total_text).isdigit() and int(total_text) > 0 else None
-    written = 0
+    total_bytes = int(response.headers.get("content-length", "0") or "0")
 
-    with open(local_path, "wb") as file_handle, tqdm(
-        total=total,
+    progress = tqdm(
+        total=total_bytes if total_bytes > 0 else None,
         unit="B",
         unit_scale=True,
-        unit_divisor=1024,
         desc="Downloading source video " + filename_with_ext,
-    ) as bar:
+    )
+
+    with open(tmp_path, "wb") as handle:
         for chunk in response.iter_content(chunk_size=1024 * 1024):
-            if chunk:
-                file_handle.write(chunk)
-                written += len(chunk)
-                if total:
-                    bar.update(len(chunk))
+            if not chunk:
+                continue
 
-    if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
-        resolution = get_video_resolution_label(local_path)
-        fps = get_video_fps(local_path)
+            handle.write(chunk)
+            progress.update(len(chunk))
 
-        logger.info(
-            "Downloaded source video from %s to %s | bytes=%d | resolution=%s | fps=%.3f",
-            source_url,
-            local_path,
-            written,
-            resolution,
-            fps,
-        )
+    progress.close()
 
-        return local_path
+    if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
-    logger.warning("Download produced no usable file for %s", filename_with_ext)
-    return None
+        logger.warning("Downloaded source video was empty: %s", filename_with_ext)
+        return None
 
+    os.replace(tmp_path, final_path)
+
+    file_size = os.path.getsize(final_path)
+
+    capture = cv2.VideoCapture(final_path)
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = float(capture.get(cv2.CAP_PROP_FPS))
+    capture.release()
+
+    logger.info(
+        "Downloaded source video from %s to %s | bytes=%s | resolution=%sx%s | fps=%.3f",
+        source_url,
+        final_path,
+        file_size,
+        width,
+        height,
+        fps,
+    )
+
+    return final_path
 
 def fetch_url(session, url, stream):
     response = session.get(url, timeout=FTP_TIMEOUT_SECONDS, stream=stream)
@@ -726,6 +784,7 @@ def run_pipeline_one_job(job, index, total):
 
 
 def main():
+    reset_ftp_video_tmp_dir()
     max_jobs = int(sys.argv[1]) if len(sys.argv) > 1 else None
     start_index = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 
@@ -761,6 +820,8 @@ def main():
     print("alpamayo_json_dir:", ALPAMAYO_JSON_DIR)
 
     ready_jobs = []
+    downloaded_source_videos_for_cleanup = set()
+
 
     for offset, job in enumerate(selected):
         ready = prepare_one_job(job, start_index + offset, len(jobs))

@@ -115,11 +115,9 @@ def extract_sample_frames(video_file, metadata):
             print("Could not read frame:", frame_index)
             raise SystemExit(1)
 
-        frame_file = (
-            OUTPUT_PREVIEW_DIR
-            + "/frame_"
-            + str(frame_index).zfill(6)
-            + ".jpg"
+        frame_file = os.path.join(
+            OUTPUT_PREVIEW_DIR,
+            "frame_" + str(frame_index).zfill(6) + ".jpg",
         )
 
         cv2.imwrite(frame_file, frame)

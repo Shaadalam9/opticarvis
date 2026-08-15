@@ -1,4 +1,4 @@
-﻿id,locality,locality_aka,state,country,iso3,continent,lat,lon,gmp,population_locality,population_country,traffic_mortality,literacy_rate,avg_height,med_age,gini,traffic_index,videos,time_of_day,start_time,end_time,vehicle_type,upload_date,channel
+id,locality,locality_aka,state,country,iso3,continent,lat,lon,gmp,population_locality,population_country,traffic_mortality,literacy_rate,avg_height,med_age,gini,traffic_index,videos,time_of_day,start_time,end_time,vehicle_type,upload_date,channel
 1,Cairo,[],,Egypt,EGY,Africa,30.048819,31.243666,190.2,9606916,118365995.0,10.1,85.29,167.73,25.2,28.5,228.7,[Esyp2P0uJu4],[[0]],[[36]],[[3636]],[0],[7022021],[UCBcVQr-07MH-p9e2kRTdB3A]
 2,Cape Town,[],,South Africa,ZAF,Africa,-33.9288301,18.4172197,56.3,4710000,64747319.0,22.2,91.5,164.1,28.0,54.1,186.5,[Fvt6rD9tt1c],[[0]],[[22]],[[3622]],[0],[26022022],[UCBcVQr-07MH-p9e2kRTdB3A]
 3,Serrekunda,[],,Gambia,GMB,Africa,13.438762,-16.674807,0.0,340000,2822093.0,29.6,65.27,165.04,19.9,38.8,0.0,[WtkmFcAnM-8],[[0]],[[0]],[[3600]],[0],[5072026],[UCdLwwg5FvjEdsIw1_b0C7GA]

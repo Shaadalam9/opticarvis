@@ -1,319 +1,175 @@
-r"""Shared helpers and per clip configuration for the OptiCarVis workflow.
+"""Shared OptiCarVis configuration, paths and small file helpers.
 
-This file is the single source of truth for the current clip or job.
-The batch runner overrides these values with environment variables, so you do
-not need to edit every module for every city or every 30 second window.
-
-Folder layout after consolidation:
-
-opticarvis/
-    src/
-    videos/
-    mapping.csv
-    alpamayo_outputs/
-    workflow_outputs/
-    external/
-        alpamayo/
-        oom-free-alpamayo/
-        UFLDv2/
-
-Common environment variables:
-OPTICARVIS_PROJECT_ROOT
-OPTICARVIS_VIDEO_ID
-OPTICARVIS_SEGMENT_START_S
-OPTICARVIS_CLIP_LENGTH_S
-OPTICARVIS_CLIP_VIDEO
-OPTICARVIS_SOURCE_VIDEO
-OPTICARVIS_ALPAMAYO_JSON
-OPTICARVIS_JOB_ID
-OPTICARVIS_LOCALITY
-OPTICARVIS_COUNTRY
-OPTICARVIS_CONTINENT
-OPTICARVIS_MAPPING_CSV
-OPTICARVIS_WORKFLOW_OUTPUTS
-OPTICARVIS_ALPAMAYO_OUTPUTS
-OPTICARVIS_ALPAMAYO_REPO
-OPTICARVIS_OOM_FREE_ALPAMAYO_REPO
-OPTICARVIS_UFLDV2_DIR
+This module is intentionally OS independent:
+- path construction uses os.path.join
+- paths are normalised with os.path.normpath
+- no local absolute paths are hardcoded
+- environment variables can override all runtime paths
 """
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
-import sys
+
+
+def env_text(name, default):
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value)
+
+
+def env_float(name, default):
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return float(default)
+    return float(value)
+
+
+def env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return bool(default)
+
+    text = str(value).strip().lower()
+    return text in ("1", "true", "yes", "y", "on")
 
 
 def normalise_path(path):
-    """Return a path with forward slashes for stable JSON and logging."""
-    return os.path.abspath(path).replace("\\", "/")
+    """Return a native path for the current operating system."""
+    if path is None:
+        return None
+
+    text = os.path.expandvars(os.path.expanduser(str(path)))
+    return os.path.normpath(text)
 
 
-SRC_DIR = normalise_path(os.path.dirname(__file__))
-DEFAULT_PROJECT_ROOT = normalise_path(os.path.join(SRC_DIR, ".."))
-
-PROJECT_ROOT = normalise_path(
-    os.environ.get("OPTICARVIS_PROJECT_ROOT", DEFAULT_PROJECT_ROOT)
-)
-
-# Kept as an alias because older modules may still import OPTICARVIS_DIR.
-OPTICARVIS_DIR = PROJECT_ROOT
-
-VIDEO_ID = os.environ.get("OPTICARVIS_VIDEO_ID", "TuCsyBF3nHU")
-SEGMENT_START_TIME_S = float(os.environ.get("OPTICARVIS_SEGMENT_START_S", "4630.0"))
-CLIP_LENGTH_S = float(os.environ.get("OPTICARVIS_CLIP_LENGTH_S", "30.0"))
-
-JOB_ID = os.environ.get(
-    "OPTICARVIS_JOB_ID",
-    VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S)),
-)
-
-LOCALITY = os.environ.get("OPTICARVIS_LOCALITY", "")
-COUNTRY = os.environ.get("OPTICARVIS_COUNTRY", "")
-CONTINENT = os.environ.get("OPTICARVIS_CONTINENT", "")
-
-VIDEOS_DIR = normalise_path(
-    os.environ.get("OPTICARVIS_VIDEOS_DIR", PROJECT_ROOT + "/videos")
-)
-
-WORKFLOW_OUTPUTS = normalise_path(
-    os.environ.get("OPTICARVIS_WORKFLOW_OUTPUTS", PROJECT_ROOT + "/workflow_outputs")
-)
-
-ALPAMAYO_OUTPUTS = normalise_path(
-    os.environ.get("OPTICARVIS_ALPAMAYO_OUTPUTS", PROJECT_ROOT + "/alpamayo_outputs")
-)
-
-CROWD_CLIPS_DIR = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_CROWD_CLIPS_DIR",
-        ALPAMAYO_OUTPUTS + "/crowd_clips",
-    )
-)
-
-ALPAMAYO_JSON_DIR = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_ALPAMAYO_JSON_DIR",
-        ALPAMAYO_OUTPUTS + "/alpamayo_json",
-    )
-)
-
-EXTERNAL_DIR = normalise_path(
-    os.environ.get("OPTICARVIS_EXTERNAL_DIR", PROJECT_ROOT + "/external")
-)
-
-ALPAMAYO_REPO = normalise_path(
-    os.environ.get("OPTICARVIS_ALPAMAYO_REPO", EXTERNAL_DIR + "/alpamayo")
-)
-
-OOM_FREE_ALPAMAYO_REPO = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_OOM_FREE_ALPAMAYO_REPO",
-        EXTERNAL_DIR + "/oom-free-alpamayo",
-    )
-)
-
-UFLDV2_DIR = normalise_path(
-    os.environ.get("OPTICARVIS_UFLDV2_DIR", EXTERNAL_DIR + "/UFLDv2")
-)
-
-MAPPING_CSV = normalise_path(
-    os.environ.get("OPTICARVIS_MAPPING_CSV", PROJECT_ROOT + "/mapping.csv")
-)
-
-SOURCE_VIDEO = normalise_path(
-    os.environ.get("OPTICARVIS_SOURCE_VIDEO", VIDEOS_DIR + "/" + VIDEO_ID + ".mp4")
-)
+def join_path(*parts):
+    clean_parts = [str(part) for part in parts if part is not None and str(part) != ""]
+    return normalise_path(os.path.join(*clean_parts))
 
 
-# ---------------------------------------------------------------------------
-# Models
-#
-# Every checkpoint the pipeline loads is named here so a model can be swapped
-# without editing the module that happens to load it. Values are Hugging Face
-# ids (or a local directory) except YOLO_SEG_MODEL, which ultralytics resolves
-# as a weights filename and downloads on first use.
-# ---------------------------------------------------------------------------
+def env_path(name, *default_parts):
+    value = os.environ.get(name)
+    if value is not None and str(value).strip() != "":
+        return normalise_path(value)
 
-YOLO_SEG_MODEL = os.environ.get("OPTICARVIS_YOLO_SEG_MODEL", "yolo26x-seg.pt")
-
-ROAD_SEG_MODEL = os.environ.get(
-    "OPTICARVIS_ROAD_SEG_MODEL",
-    "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
-)
-
-DEPTH_MODEL = os.environ.get(
-    "OPTICARVIS_DEPTH_MODEL",
-    "depth-anything/Depth-Anything-V2-Small-hf",
-)
-
-GEMMA4_MODEL = os.environ.get("OPTICARVIS_GEMMA4_MODEL", "google/gemma-4-E2B-it")
-
-# The Hub is consulted only when this is off. It defaults to on because a
-# metadata call per load stalls long batches, but a machine that has not
-# downloaded the weights yet needs OPTICARVIS_HF_LOCAL_FILES_ONLY=0 for the
-# first run.
-HF_LOCAL_FILES_ONLY = os.environ.get("OPTICARVIS_HF_LOCAL_FILES_ONLY", "1") == "1"
+    return join_path(*default_parts)
 
 
-# ---------------------------------------------------------------------------
-# Alpamayo backend
-#
-# The planner runs as a subprocess so its checkpoint, CLI and Python
-# environment are all swappable without touching this repo. A larger model
-# (for example nvidia/Alpamayo2-Super) generally needs its own interpreter with
-# its own torch/transformers, which is what ALPAMAYO_PYTHON selects.
-# ---------------------------------------------------------------------------
-
-ALPAMAYO_PYTHON = os.environ.get("OPTICARVIS_ALPAMAYO_PYTHON", "")
-
-ALPAMAYO_MODEL = os.environ.get("OPTICARVIS_ALPAMAYO_MODEL", "")
-
-ALPAMAYO_EXTRA_ARGS = os.environ.get("OPTICARVIS_ALPAMAYO_EXTRA_ARGS", "")
-
-
-def alpamayo_python():
-    """Interpreter for the Alpamayo subprocess, defaulting to the current one."""
-    return ALPAMAYO_PYTHON or sys.executable
-
-
-def alpamayo_extra_args():
-    """Extra CLI arguments for the Alpamayo backend, parsed shell style."""
-    if not ALPAMAYO_EXTRA_ARGS:
-        return []
-
-    return shlex.split(ALPAMAYO_EXTRA_ARGS)
-
-
-def model_summary():
-    """Every model the pipeline would load, for logging and workflow state."""
-    return {
-        "yolo_seg_model": YOLO_SEG_MODEL,
-        "road_seg_model": ROAD_SEG_MODEL,
-        "depth_model": DEPTH_MODEL,
-        "gemma4_model": GEMMA4_MODEL,
-        "hf_local_files_only": HF_LOCAL_FILES_ONLY,
-        "alpamayo_python": alpamayo_python(),
-        "alpamayo_model": ALPAMAYO_MODEL,
-        "alpamayo_extra_args": alpamayo_extra_args(),
-    }
+def number_tag(value):
+    value = float(value)
+    if value.is_integer():
+        return str(int(value))
+    text = ("%0.3f" % value).rstrip("0").rstrip(".")
+    return text.replace(".", "p")
 
 
 def clip_length_tag():
-    value = int(round(CLIP_LENGTH_S))
-    return str(value) + "s"
+    return number_tag(CLIP_LENGTH_S) + "s"
 
 
 def segment_tag():
-    """Filename stem shared by every per clip artefact."""
-    return VIDEO_ID + "_" + str(int(SEGMENT_START_TIME_S))
-
-
-def workflow_path(*parts):
-    """Join parts under PROJECT_ROOT/workflow_outputs with forward slashes."""
-    return normalise_path(os.path.join(WORKFLOW_OUTPUTS, *parts))
-
-
-def alpamayo_output_path(*parts):
-    """Join parts under PROJECT_ROOT/alpamayo_outputs with forward slashes."""
-    return normalise_path(os.path.join(ALPAMAYO_OUTPUTS, *parts))
-
-
-def clip_stem(clip_path):
-    """Basename of a clip without extension."""
-    return os.path.splitext(os.path.basename(clip_path))[0]
+    return VIDEO_ID + "_" + number_tag(SEGMENT_START_TIME_S)
 
 
 def ensure_dir(path):
-    """Create a directory and parents if it does not already exist."""
-    if path and not os.path.isdir(path):
-        os.makedirs(path)
+    path = normalise_path(path)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
-CLIP_VIDEO = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_CLIP_VIDEO",
-        CROWD_CLIPS_DIR + "/" + segment_tag() + "_" + clip_length_tag() + ".mp4",
-    )
-)
+def workflow_path(*parts):
+    if not parts:
+        return WORKFLOW_OUTPUTS
+    return join_path(WORKFLOW_OUTPUTS, *parts)
 
-ALPAMAYO_JSON = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_ALPAMAYO_JSON",
-        ALPAMAYO_JSON_DIR + "/" + segment_tag() + "_alpamayo.json",
-    )
-)
 
-STATE_JSON = workflow_path(segment_tag() + "_workflow_state.json")
+def alpamayo_output_path(*parts):
+    if not parts:
+        return ALPAMAYO_OUTPUTS
+    return join_path(ALPAMAYO_OUTPUTS, *parts)
 
-# Delivery encode. cv2.VideoWriter can only emit mp4v/FMP4 here, which many
-# players and browsers will not play, so renders can be transcoded to H.264.
-H264_CRF = "20"
+
+def clip_stem(clip_path):
+    return os.path.splitext(os.path.basename(str(clip_path)))[0]
 
 
 def read_json(path, label="input JSON"):
-    """Load JSON, exiting with a clear message if the file is missing."""
-    if not path or not os.path.isfile(path):
-        print("Missing " + label + ":")
-        print(path)
-        raise SystemExit(1)
+    path = normalise_path(path)
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
 def write_json(path, payload):
-    """Write payload as pretty printed JSON."""
-    ensure_dir(os.path.dirname(path))
+    path = normalise_path(path)
+    parent = os.path.dirname(path)
+    if parent:
+        ensure_dir(parent)
+
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
+    return path
+
 
 def read_jsonl(path):
+    path = normalise_path(path)
     rows = []
-    if not os.path.isfile(path):
+
+    if not os.path.exists(path):
         return rows
+
     with open(path, "r", encoding="utf-8") as handle:
         for line in handle:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+            text = line.strip()
+            if text:
+                rows.append(json.loads(text))
+
     return rows
 
 
 def append_jsonl(path, payload):
-    ensure_dir(os.path.dirname(path))
+    path = normalise_path(path)
+    parent = os.path.dirname(path)
+    if parent:
+        ensure_dir(parent)
+
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
+    return path
+
 
 def clamp(value, low, high):
-    """Clamp value into the inclusive range [low, high]."""
     return max(low, min(high, value))
 
 
 def ffmpeg_path():
-    """Absolute path to ffmpeg, or None when it is not on PATH."""
-    return shutil.which("ffmpeg")
+    configured = os.environ.get("OPTICARVIS_FFMPEG")
+    if configured is not None and str(configured).strip() != "":
+        return normalise_path(configured)
+
+    discovered = shutil.which("ffmpeg")
+    if discovered:
+        return normalise_path(discovered)
+
+    return "ffmpeg"
 
 
-def transcode_h264(source, destination, crf=H264_CRF, remove_source=True):
-    """Transcode source to H.264/yuv420p at destination.
+def transcode_h264(source, destination, crf=None, remove_source=True):
+    source = normalise_path(source)
+    destination = normalise_path(destination)
+    crf_value = H264_CRF if crf is None else crf
 
-    Returns the destination path on success, or None when ffmpeg is unavailable
-    or fails, so the caller can still report the original master file.
-    """
-    binary = ffmpeg_path()
-    if binary is None:
-        print("WARNING: ffmpeg not found on PATH; keeping the mp4v master:")
-        print("  " + source)
-        return None
+    parent = os.path.dirname(destination)
+    if parent:
+        ensure_dir(parent)
 
     command = [
-        binary,
+        ffmpeg_path(),
         "-y",
-        "-loglevel",
-        "error",
         "-i",
         source,
         "-c:v",
@@ -321,25 +177,90 @@ def transcode_h264(source, destination, crf=H264_CRF, remove_source=True):
         "-pix_fmt",
         "yuv420p",
         "-crf",
-        str(crf),
+        str(crf_value),
+        "-preset",
+        "medium",
+        "-movflags",
+        "+faststart",
         destination,
     ]
-    completed = subprocess.run(command, capture_output=True, text=True)
-    if completed.returncode != 0 or not os.path.isfile(destination):
-        print("WARNING: ffmpeg failed, keeping the mp4v master:")
-        if completed.stderr:
-            print(completed.stderr.strip()[:600])
-        print("  " + source)
-        return None
 
-    if remove_source and os.path.abspath(source) != os.path.abspath(destination):
+    subprocess.run(command, check=True)
+
+    if remove_source and os.path.exists(source) and normalise_path(source) != normalise_path(destination):
         os.remove(source)
 
     return destination
 
 
+# ---------------------------------------------------------------------------
+# Core job settings
+# ---------------------------------------------------------------------------
+
+VIDEO_ID = env_text("OPTICARVIS_VIDEO_ID", "TuCsyBF3nHU")
+SEGMENT_START_TIME_S = env_float("OPTICARVIS_SEGMENT_START_TIME_S", 4630.0)
+CLIP_LENGTH_S = env_float("OPTICARVIS_CLIP_LENGTH_S", 30.0)
+
+JOB_ID = env_text("OPTICARVIS_JOB_ID", "manual_" + segment_tag())
+LOCALITY = env_text("OPTICARVIS_LOCALITY", "unknown")
+COUNTRY = env_text("OPTICARVIS_COUNTRY", "unknown")
+CONTINENT = env_text("OPTICARVIS_CONTINENT", "unknown")
+
+H264_CRF = int(env_float("OPTICARVIS_H264_CRF", 20))
+
+GEMMA4_MODEL = env_text("OPTICARVIS_GEMMA4_MODEL", "google/gemma-4-E2B-it")
+HF_LOCAL_FILES_ONLY = env_bool("OPTICARVIS_HF_LOCAL_FILES_ONLY", True)
+
+
+# ---------------------------------------------------------------------------
+# Project root and runtime paths
+# ---------------------------------------------------------------------------
+
+SRC_DIR = normalise_path(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_PROJECT_ROOT = normalise_path(os.path.dirname(SRC_DIR))
+
+PROJECT_ROOT = env_path("OPTICARVIS_PROJECT_ROOT", DEFAULT_PROJECT_ROOT)
+OPTICARVIS_DIR = PROJECT_ROOT
+
+VIDEOS_DIR = env_path("OPTICARVIS_VIDEOS_DIR", PROJECT_ROOT, "videos")
+WORKFLOW_OUTPUTS = env_path("OPTICARVIS_WORKFLOW_OUTPUTS", PROJECT_ROOT, "workflow_outputs")
+ALPAMAYO_OUTPUTS = env_path("OPTICARVIS_ALPAMAYO_OUTPUTS", PROJECT_ROOT, "alpamayo_outputs")
+
+CROWD_CLIPS_DIR = env_path("OPTICARVIS_CROWD_CLIPS_DIR", ALPAMAYO_OUTPUTS, "crowd_clips")
+ALPAMAYO_JSON_DIR = env_path("OPTICARVIS_ALPAMAYO_JSON_DIR", ALPAMAYO_OUTPUTS, "alpamayo_json")
+
+EXTERNAL_DIR = env_path("OPTICARVIS_EXTERNAL_DIR", PROJECT_ROOT, "external")
+ALPAMAYO_REPO = env_path("OPTICARVIS_ALPAMAYO_REPO", EXTERNAL_DIR, "alpamayo")
+OOM_FREE_ALPAMAYO_REPO = env_path(
+    "OPTICARVIS_OOM_FREE_ALPAMAYO_REPO",
+    EXTERNAL_DIR,
+    "oom-free-alpamayo",
+)
+UFLDV2_DIR = env_path("OPTICARVIS_UFLDV2_DIR", EXTERNAL_DIR, "UFLDv2")
+
+MAPPING_CSV = env_path("OPTICARVIS_MAPPING_CSV", PROJECT_ROOT, "mapping.csv")
+SOURCE_VIDEO = env_path("OPTICARVIS_SOURCE_VIDEO", VIDEOS_DIR, VIDEO_ID + ".mp4")
+
+CLIP_VIDEO = env_path(
+    "OPTICARVIS_CLIP_VIDEO",
+    CROWD_CLIPS_DIR,
+    segment_tag() + "_" + clip_length_tag() + ".mp4",
+)
+
+ALPAMAYO_JSON = env_path(
+    "OPTICARVIS_ALPAMAYO_JSON",
+    ALPAMAYO_JSON_DIR,
+    segment_tag() + "_alpamayo.json",
+)
+
+STATE_JSON = env_path(
+    "OPTICARVIS_STATE_JSON",
+    WORKFLOW_OUTPUTS,
+    segment_tag() + "_workflow_state.json",
+)
+
+
 def current_job_summary():
-    """Small metadata block that every module can store in its JSON output."""
     return {
         "job_id": JOB_ID,
         "video_id": VIDEO_ID,
@@ -357,8 +278,74 @@ def current_job_summary():
         "alpamayo_repo": ALPAMAYO_REPO,
         "oom_free_alpamayo_repo": OOM_FREE_ALPAMAYO_REPO,
         "ufldv2_dir": UFLDV2_DIR,
+        "mapping_csv": MAPPING_CSV,
         "source_video": SOURCE_VIDEO,
         "clip_video": CLIP_VIDEO,
         "alpamayo_json": ALPAMAYO_JSON,
         "state_json": STATE_JSON,
+        "gemma4_model": GEMMA4_MODEL,
+        "hf_local_files_only": HF_LOCAL_FILES_ONLY,
     }
+
+# Backward compatible Alpamayo runtime constants.
+# These are used by batch_corrected_pipeline.py.
+ALPAMAYO_MODEL = os.environ.get("OPTICARVIS_ALPAMAYO_MODEL", "").strip()
+
+ALPAMAYO_CONFIG = os.environ.get(
+    "OPTICARVIS_ALPAMAYO_CONFIG",
+    "config_5080_16gb.json",
+)
+
+ALPAMAYO_CONFIG_PATH = normalise_path(
+    os.environ.get(
+        "OPTICARVIS_ALPAMAYO_CONFIG_PATH",
+        os.path.join(OOM_FREE_ALPAMAYO_REPO, ALPAMAYO_CONFIG),
+    )
+)
+
+def alpamayo_extra_args():
+    """Return optional extra command line arguments for Alpamayo."""
+    import shlex
+
+    raw_args = os.environ.get("OPTICARVIS_ALPAMAYO_EXTRA_ARGS", "").strip()
+
+    if not raw_args:
+        return []
+
+    return shlex.split(raw_args)
+
+def alpamayo_python():
+    """Return the Python interpreter used to run Alpamayo."""
+    import sys
+
+    return normalise_path(
+        os.environ.get("OPTICARVIS_ALPAMAYO_PYTHON", sys.executable)
+    )
+
+# Semantic segmentation runtime constants.
+# Kept as compatibility names for semantic_segmentation_module.py.
+YOLO_SEG_MODEL = os.environ.get(
+    "OPTICARVIS_YOLO_SEG_MODEL",
+    "yolo26x-seg.pt",
+)
+
+YOLO_SEG_IMAGE_SIZE = int(
+    float(os.environ.get("OPTICARVIS_YOLO_SEG_IMAGE_SIZE", "1280"))
+)
+
+YOLO_SEG_CONFIDENCE = float(
+    os.environ.get("OPTICARVIS_YOLO_SEG_CONFIDENCE", "0.25")
+)
+
+# Scene model compatibility constants.
+# These are used by scene_models.py.
+DEPTH_MODEL = os.environ.get(
+    "OPTICARVIS_DEPTH_MODEL",
+    "depth_anything_v2_small",
+)
+
+ROAD_SEG_MODEL = os.environ.get(
+    "OPTICARVIS_ROAD_SEG_MODEL",
+    os.environ.get("OPTICARVIS_YOLO_SEG_MODEL", "yolo26x-seg.pt"),
+)
+

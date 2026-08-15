@@ -75,7 +75,7 @@ def extract_key_frames():
             print("Could not read frame:", frame_index)
             raise SystemExit(1)
 
-        frame_file = KEY_FRAME_DIR + "/frame_" + str(frame_index).zfill(6) + ".jpg"
+        frame_file = os.path.join(KEY_FRAME_DIR, "frame_" + str(frame_index).zfill(6) + ".jpg")
         cv2.imwrite(frame_file, frame)
         frames.append({
             "frame_index": frame_index,

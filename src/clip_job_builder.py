@@ -44,14 +44,14 @@ STRIDE_S = float(os.environ.get("OPTICARVIS_STRIDE_S", "60"))
 OUTPUT_JSONL = normalise_path(
     os.environ.get(
         "OPTICARVIS_CLIP_JOBS",
-        WORKFLOW_OUTPUTS + "/clip_jobs.jsonl",
+        os.path.join(WORKFLOW_OUTPUTS, "clip_jobs.jsonl"),
     )
 )
 
 OUTPUT_SUMMARY = normalise_path(
     os.environ.get(
         "OPTICARVIS_CLIP_JOBS_SUMMARY",
-        WORKFLOW_OUTPUTS + "/clip_jobs_summary.json",
+        os.path.join(WORKFLOW_OUTPUTS, "clip_jobs_summary.json"),
     )
 )
 
@@ -193,7 +193,7 @@ def row_intervals(row):
                     "end_s": float(end_s),
                     "time_of_day": time_code,
                     "duration_s": float(end_s - start_s),
-                    "source_video": normalise_path(VIDEO_ROOT + "/" + video_id + ".mp4"),
+                    "source_video": normalise_path(os.path.join(VIDEO_ROOT, video_id + ".mp4")),
                 }
             )
 
@@ -241,23 +241,25 @@ def build_jobs_for_city(row, city_index):
             )
 
             clip_video = normalise_path(
-                CLIP_ROOT
-                + "/"
-                + interval["video_id"]
-                + "_"
-                + str(start_int)
-                + "_"
-                + str(int(round(CLIP_LENGTH_S)))
-                + "s.mp4"
+                os.path.join(
+                    CLIP_ROOT,
+                    interval["video_id"]
+                    + "_"
+                    + str(start_int)
+                    + "_"
+                    + str(int(round(CLIP_LENGTH_S)))
+                    + "s.mp4",
+                )
             )
 
             alpamayo_json = normalise_path(
-                ALPAMAYO_JSON_ROOT
-                + "/"
-                + interval["video_id"]
-                + "_"
-                + str(start_int)
-                + "_alpamayo.json"
+                os.path.join(
+                    ALPAMAYO_JSON_ROOT,
+                    interval["video_id"]
+                    + "_"
+                    + str(start_int)
+                    + "_alpamayo.json",
+                )
             )
 
             jobs.append(
