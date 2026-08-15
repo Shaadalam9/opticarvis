@@ -174,6 +174,65 @@ def test_adapter_tags_clips_by_video_and_start():
     assert first["video_id"] != second["video_id"]
 
 
+def test_one_failed_job_does_not_abort_the_batch():
+    """A failing render must be recorded, not thrown, unless asked otherwise.
+
+    Read from source: batch_corrected_pipeline pulls in common.get_configs at
+    import time, which sys.exit(1)s without a `config` file, so this test cannot
+    import it on a bare checkout.
+
+    The regression is cheap to reintroduce and expensive to discover -- it costs
+    a whole batch, hours in, and only on the clips that fail.
+    """
+    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    start = source.index("def run_pipeline_one_job")
+    body = source[start:source.index("\ndef ", start + 1)]
+
+    assert "STOP_ON_JOB_FAILURE" in body, (
+        "run_pipeline_one_job must gate its abort on STOP_ON_JOB_FAILURE"
+    )
+
+    for line in body.splitlines():
+        stripped = line.strip()
+
+        if stripped.startswith("raise SystemExit"):
+            assert "STOP_ON_JOB_FAILURE" in body[: body.index(stripped)][-400:], (
+                "run_pipeline_one_job raises SystemExit outside the "
+                "STOP_ON_JOB_FAILURE guard -- one bad clip would abort the batch"
+            )
+
+    assert os.environ.get("OPTICARVIS_STOP_ON_JOB_FAILURE") is None, (
+        "this test assumes the flag is unset by default"
+    )
+    assert '"OPTICARVIS_STOP_ON_JOB_FAILURE", "0"' in source, (
+        "STOP_ON_JOB_FAILURE must default to off"
+    )
+
+
+def test_batch_exit_code_survives_a_partial_run():
+    """main() may only exit non zero when nothing rendered at all.
+
+    main.py runs the chunks with check=True, so exiting non zero on a partial
+    batch would abort every later chunk and reintroduce the same failure one
+    level up.
+    """
+    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    body = source[source.index("\ndef main("):]
+
+    assert "if ready_jobs and not rendered:" in body, (
+        "main() must only fail the run when no job rendered; found a different "
+        "exit condition, which would abort later chunks under main.py"
+    )
+
+
 def write_mapping(path, cities):
     """A mapping.csv with only the columns clip_job_builder reads."""
     header = [

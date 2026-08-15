@@ -119,6 +119,10 @@ EXTRACT_CLIPS = os.environ.get("OPTICARVIS_EXTRACT_CLIPS", "1") == "1"
 RUN_ALPAMAYO = os.environ.get("OPTICARVIS_RUN_ALPAMAYO", "1") == "1"
 SKIP_EXISTING_STATE = os.environ.get("OPTICARVIS_SKIP_EXISTING_STATE", "0") == "1"
 
+# Default off: a 100 city batch should record a failed clip and carry on. Set it
+# while debugging a single job, when the first traceback is the thing you want.
+STOP_ON_JOB_FAILURE = os.environ.get("OPTICARVIS_STOP_ON_JOB_FAILURE", "0") == "1"
+
 VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi"]
 DOWNLOAD_MISSING_SOURCE_VIDEOS = True
 
@@ -920,7 +924,7 @@ def run_pipeline_one_job(job, index, total):
         append_master(job, "skipped_missing_alpamayo_json", "missing_alpamayo_json", elapsed)
         print("Skipped: missing_alpamayo_json")
         print("Expected Alpamayo JSON:", job["alpamayo_json"])
-        return
+        return False
 
     env = job_environment(job)
 
@@ -934,9 +938,24 @@ def run_pipeline_one_job(job, index, total):
 
     if completed.returncode != 0:
         append_master(job, "failed_pipeline", "return_code_" + str(completed.returncode), elapsed)
-        raise SystemExit(completed.returncode)
+        print("FAILED:", job["job_id"], "return code", completed.returncode)
+
+        # A single bad clip must not discard the rest of the batch. Failing the
+        # whole run here meant one unrenderable city threw away every city after
+        # it, after hours of GPU time -- and clips do fail for ordinary reasons:
+        # visual odometry cannot recover ego motion in dense traffic, so the
+        # planner refuses the clip rather than feed the model a stopped-car
+        # history. The failure is recorded in the master index; main() reports
+        # the tally and exits non zero so a caller still notices.
+        if STOP_ON_JOB_FAILURE:
+            print("Stopping: OPTICARVIS_STOP_ON_JOB_FAILURE is set")
+            raise SystemExit(completed.returncode)
+
+        return False
 
     append_master(job, "complete", "pipeline_complete", elapsed)
+
+    return True
 
 
 def main():
@@ -987,12 +1006,36 @@ def main():
 
     run_alpamayo_for_ready_jobs(ready_jobs, start_index)
 
+    rendered = []
+    failed = []
+
     for offset, job in enumerate(ready_jobs):
-        run_pipeline_one_job(job, start_index + offset, len(jobs))
+        if run_pipeline_one_job(job, start_index + offset, len(jobs)):
+            rendered.append(job["job_id"])
+        else:
+            failed.append(job["job_id"])
 
     print("")
     print("Batch complete.")
+    print("prepared:", len(ready_jobs), "of", len(selected), "| rendered:", len(rendered),
+          "| failed:", len(failed))
+
+    if failed:
+        print("")
+        print("Jobs that did not render:")
+
+        for job_id in failed:
+            print("  " + job_id)
+
     print("Master index:", MASTER_INDEX_JSONL)
+
+    # Non zero only when nothing rendered at all, matching the convention the
+    # planner wrapper and adapter already use. main.py drives the chunks with
+    # check=True, so exiting non zero on a partial batch would abort every later
+    # chunk -- reintroducing at the chunk level exactly the failure this change
+    # removes at the job level.
+    if ready_jobs and not rendered:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
