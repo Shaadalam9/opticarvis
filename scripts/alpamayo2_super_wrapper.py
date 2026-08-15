@@ -563,9 +563,55 @@ def torch_dtype(name):
     return {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[name]
 
 
+def patch_expert_attention_mask_dtype(dtype):
+    """Make the expert's additive attention mask match the compute dtype.
+
+    build_expert_pos_ids_and_attn_mask() hardcodes float32 for its 4-D additive
+    mask (alpamayo2_super/models/expert_utils.py). Torch's memory-efficient SDPA
+    kernel requires attn_mask.dtype == query.dtype, so with bf16 weights the
+    expert denoiser dies with
+
+        RuntimeError: invalid dtype for bias - should match query's dtype
+
+    Upstream does not see this on H100, where these shapes select the flash
+    backend instead -- and flash takes no bias at all, so the dtype never gets
+    checked. Anywhere flash is unavailable the memory-efficient kernel runs and
+    the mismatch surfaces; on GB10/sm_121 that is every time, because the shipped
+    wheels compile only to sm_120.
+
+    The clamp matters: float32's finfo.min is larger in magnitude than
+    bfloat16's, so a bare .to(bfloat16) rounds the masked entries to -inf. That
+    is harmless while every row keeps one unmasked key and silently produces NaN
+    the moment one does not.
+
+    Patched here rather than in external/alpamayo2 because that checkout is
+    gitignored and re-cloned; a fix living there would vanish without warning.
+    """
+    import torch
+    from alpamayo2_super.models import alpamayo2_super as module
+
+    original = module.build_expert_pos_ids_and_attn_mask
+
+    if getattr(original, "_opticarvis_dtype_patched", False):
+        return
+
+    def build_in_compute_dtype(*args, **kwargs):
+        position_ids, attention_mask = original(*args, **kwargs)
+
+        if attention_mask is not None and attention_mask.dtype != dtype:
+            attention_mask = attention_mask.clamp(min=torch.finfo(dtype).min).to(dtype)
+
+        return position_ids, attention_mask
+
+    build_in_compute_dtype._opticarvis_dtype_patched = True
+    module.build_expert_pos_ids_and_attn_mask = build_in_compute_dtype
+
+
 def load_model(args):
     import torch  # noqa: F401  (registers the module for object_to_json)
     from alpamayo2_super.models.alpamayo2_super import Alpamayo2Super
+
+    patch_expert_attention_mask_dtype(torch_dtype(args.dtype))
 
     print("Loading model:", args.model)
     started = time.time()

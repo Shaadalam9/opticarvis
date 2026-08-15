@@ -27,6 +27,21 @@ def env_float(name, default):
     return float(value)
 
 
+def env_float_alias(names, default):
+    """First non-empty of several env names, for variables that were renamed.
+
+    A plain env_float on the wrong name fails silently -- the child keeps the
+    default and every artefact it writes is misnamed -- so the alias list is
+    resolved here rather than at each call site.
+    """
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and str(value).strip() != "":
+            return float(value)
+
+    return float(default)
+
+
 def env_bool(name, default):
     value = os.environ.get(name)
     if value is None or str(value).strip() == "":
@@ -198,7 +213,15 @@ def transcode_h264(source, destination, crf=None, remove_source=True):
 # ---------------------------------------------------------------------------
 
 VIDEO_ID = env_text("OPTICARVIS_VIDEO_ID", "TuCsyBF3nHU")
-SEGMENT_START_TIME_S = env_float("OPTICARVIS_SEGMENT_START_TIME_S", 4630.0)
+# OPTICARVIS_SEGMENT_START_S is the canonical name: it is what the batch runner
+# exports (batch_corrected_pipeline.job_environment) and what the README
+# documents. OPTICARVIS_SEGMENT_START_TIME_S is the older name, still honoured so
+# existing shells keep working. Reading only the old name meant the batch's value
+# never arrived and every clip of a video reused the 4630 artefact names.
+SEGMENT_START_TIME_S = env_float_alias(
+    ("OPTICARVIS_SEGMENT_START_S", "OPTICARVIS_SEGMENT_START_TIME_S"),
+    4630.0,
+)
 CLIP_LENGTH_S = env_float("OPTICARVIS_CLIP_LENGTH_S", 30.0)
 
 JOB_ID = env_text("OPTICARVIS_JOB_ID", "manual_" + segment_tag())

@@ -390,7 +390,12 @@ needs no code edits.
 | `OPTICARVIS_OOM_FREE_ALPAMAYO_REPO` | `<external>/oom-free-alpamayo` | Checkout providing `infer_crowd_clip.py` |
 | `OPTICARVIS_UFLDV2_DIR` | `<external>/UFLDv2` | UFLDv2 checkout |
 | `OPTICARVIS_VIDEO_ID` | `TuCsyBF3nHU` | Clip identity for per-clip artefacts |
-| `OPTICARVIS_SEGMENT_START_S` | `4630` | Segment start, used in artefact names |
+| `OPTICARVIS_SEGMENT_START_S` | `4630` | Segment start, used in artefact names. `OPTICARVIS_SEGMENT_START_TIME_S` is accepted as a legacy alias |
+| `OPTICARVIS_CLIPS_PER_CITY` | `1` | Clips `clip_job_builder.py` emits per city. `0` removes the cap and falls back to the footage budget |
+| `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv` |
+| `OPTICARVIS_CITY_FOOTAGE_S` | `3600` | Secondary per-city budget. It accrues `STRIDE_S` per clip, not `CLIP_LENGTH_S`, so it is a poor way to ask for *n* clips — use `OPTICARVIS_CLIPS_PER_CITY` |
+| `OPTICARVIS_CLIP_LENGTH_S` | `30` | Clip length in seconds |
+| `OPTICARVIS_STRIDE_S` | `60` | Gap between successive clip starts within a city |
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |
 | `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
 | `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns |

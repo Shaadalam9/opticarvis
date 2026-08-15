@@ -27,6 +27,13 @@ dependencies = [
     "scikit-learn>=1.9.0",
     "accelerate>=1.14.0",
     "physical-ai-av>=0.2.2",
+    # ByteTrack's linear assignment step. Nothing in src/ imports it, but
+    # ultralytics does not declare it either -- model.track() imports it lazily
+    # and, when it is absent, pip installs it mid-render from inside the
+    # process. Declaring it keeps a network install out of a 100 city batch and
+    # turns a missing wheel into a lock failure instead of a crash at the first
+    # tracked frame. Required as long as OPTICARVIS_TRACKER stays bytetrack.
+    "lap>=0.5.12",
 ]
 
 # PyPI ships a CPU-only torch wheel for Windows -- its win_amd64 wheel carries

@@ -9,9 +9,10 @@ Output:
 
 Default policy:
     100 cities maximum
-    1 hour per city
+    1 clip per city -- the deliverable is one rendered video per city
     30 second clip length
     60 second stride
+    1 hour per city as a secondary cap (see CLIPS_PER_CITY below)
 
 This script does not run Alpamayo or render videos. It only creates the job list.
 """
@@ -40,6 +41,15 @@ CITY_LIMIT = int(os.environ.get("OPTICARVIS_CITY_LIMIT", "100"))
 CITY_FOOTAGE_S = float(os.environ.get("OPTICARVIS_CITY_FOOTAGE_S", "3600"))
 CLIP_LENGTH_S = float(os.environ.get("OPTICARVIS_CLIP_LENGTH_S", "30"))
 STRIDE_S = float(os.environ.get("OPTICARVIS_STRIDE_S", "60"))
+
+# The deliverable is one rendered video per city, so the number of clips is
+# capped directly rather than inferred from the footage budget. CITY_FOOTAGE_S
+# is a poor cap for this: it accumulates STRIDE_S per clip, not CLIP_LENGTH_S,
+# so the default 3600/60 yields 60 clips per city (~6000 for mapping.csv), which
+# is two orders of magnitude more render time than the deliverable needs.
+# Set OPTICARVIS_CLIPS_PER_CITY=0 for no cap and the old footage-budget-only
+# behaviour.
+CLIPS_PER_CITY = int(os.environ.get("OPTICARVIS_CLIPS_PER_CITY", "1"))
 
 OUTPUT_JSONL = normalise_path(
     os.environ.get(
@@ -206,6 +216,11 @@ def row_intervals(row):
     return intervals
 
 
+def city_quota_reached(jobs):
+    """True once this city already has its full allowance of clips."""
+    return CLIPS_PER_CITY > 0 and len(jobs) >= CLIPS_PER_CITY
+
+
 def build_jobs_for_city(row, city_index):
     locality = row.get("locality", "")
     country = row.get("country", "")
@@ -216,14 +231,18 @@ def build_jobs_for_city(row, city_index):
     used_timeline_s = 0.0
 
     for interval in intervals:
-        if used_timeline_s >= CITY_FOOTAGE_S:
+        if used_timeline_s >= CITY_FOOTAGE_S or city_quota_reached(jobs):
             break
 
         source_start = interval["start_s"]
         source_end = interval["end_s"]
         t = source_start
 
-        while t + CLIP_LENGTH_S <= source_end and used_timeline_s < CITY_FOOTAGE_S:
+        while (
+            t + CLIP_LENGTH_S <= source_end
+            and used_timeline_s < CITY_FOOTAGE_S
+            and not city_quota_reached(jobs)
+        ):
             start_int = int(round(t))
             clip_tag = interval["video_id"] + "_" + str(start_int)
             city_slug = safe_slug(locality)

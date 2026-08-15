@@ -586,7 +586,15 @@ def write_alpamayo2_super_ready_jobs(ready_jobs):
 
     with open(output_path, "w", encoding="utf-8") as handle:
         for job in ready_jobs:
-            handle.write(json.dumps(job, ensure_ascii=False) + "\n")
+            row = dict(job)
+
+            # The clip jobs carry no t0, so inject the same window the R1
+            # manifest writes. Without it the adapter would fall back to its own
+            # default and the two backends would condition on different frames.
+            row["when_start_local_s"] = WHEN_START_LOCAL_S
+            row["when_end_local_s"] = WHEN_END_LOCAL_S
+
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     return output_path
 
@@ -641,26 +649,33 @@ def run_alpamayo2_super_batch(ready_jobs, start_index=0):
         model_id,
     ]
 
-    subprocess.run(command, cwd=PROJECT_ROOT, check=True)
+    command += alpamayo_extra_args()
+
+    # check is deliberately off: the adapter exits non zero only when every clip
+    # failed, and a partial batch should still render what it produced.
+    completed = subprocess.run(command, cwd=PROJECT_ROOT)
+
+    if completed.returncode != 0:
+        print("")
+        print("Alpamayo2 Super adapter returned non zero code:", completed.returncode)
 
 
-def run_alpamayo_batch(ready_jobs, start_index=0):
-    backend = get_alpamayo_backend()
+def report_alpamayo_outputs(jobs, copy_from_raw):
+    """Announce which jobs ended up with planner JSON at the expected path.
 
-    print()
-    print("Selected Alpamayo backend:", backend)
+    The R1 backend writes alpamayo_inference_output_<tag>.json and needs the
+    copy; the Alpamayo2 Super adapter writes job["alpamayo_json"] directly.
+    """
+    for job in jobs:
+        ready = copy_alpamayo_json_to_expected_path(job) if copy_from_raw \
+            else os.path.isfile(job["alpamayo_json"])
 
-    if backend == "alpamayo_r1":
-        return run_alpamayo_r1_batch(ready_jobs, start_index)
-
-    if backend == "alpamayo2_super":
-        return run_alpamayo2_super_batch(ready_jobs, start_index)
-
-    raise RuntimeError(
-        "Unknown ALPAMAYO_BACKEND: "
-        + backend
-        + ". Use alpamayo_r1 or alpamayo2_super."
-    )
+        if ready:
+            print("Alpamayo JSON ready:", job["alpamayo_json"])
+        elif copy_from_raw:
+            print("Missing Alpamayo output after batch:", alpamayo_raw_json_path(job))
+        else:
+            print("Missing Alpamayo output after batch:", job["alpamayo_json"])
 
 
 def run_alpamayo_r1_batch(jobs, start_index):
@@ -724,14 +739,34 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
         print("Alpamayo run disabled by OPTICARVIS_RUN_ALPAMAYO=0")
         return
 
+    backend = get_alpamayo_backend()
+    ensure_dir(ALPAMAYO_JSON_DIR)
+
+    print("")
+    print("Selected Alpamayo backend:", backend)
+
+    if backend == "alpamayo2_super":
+        run_alpamayo2_super_batch(missing_jobs, start_index)
+        report_alpamayo_outputs(missing_jobs, copy_from_raw=False)
+        return
+
+    if backend != "alpamayo_r1":
+        raise RuntimeError(
+            "Unknown ALPAMAYO_BACKEND: "
+            + backend
+            + ". Use alpamayo_r1 or alpamayo2_super."
+        )
+
+    # Only the R1 backend shells out to a script on disk; checking this before
+    # the dispatch used to skip the planner entirely whenever the unrelated
+    # oom-free checkout was absent.
     if not os.path.isfile(ALPAMAYO_SCRIPT):
         print("")
         print("Missing Alpamayo script:")
         print(ALPAMAYO_SCRIPT)
         return
 
-    ensure_dir(ALPAMAYO_JSON_DIR)
-    manifest_path = run_alpamayo_batch(missing_jobs, start_index)
+    manifest_path = run_alpamayo_r1_batch(missing_jobs, start_index)
 
     print("")
     print("Running Alpamayo batch")
@@ -770,13 +805,7 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
         print("Alpamayo batch returned non zero code:", completed.returncode)
         return
 
-    for job in missing_jobs:
-        copied = copy_alpamayo_json_to_expected_path(job)
-
-        if copied:
-            print("Alpamayo JSON ready:", job["alpamayo_json"])
-        else:
-            print("Missing Alpamayo output after batch:", alpamayo_raw_json_path(job))
+    report_alpamayo_outputs(missing_jobs, copy_from_raw=True)
 
 
 def job_environment(job):
