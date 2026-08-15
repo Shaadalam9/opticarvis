@@ -536,7 +536,134 @@ def extract_clip(job):
     return True, "clip_extracted"
 
 
-def write_alpamayo_manifest(jobs, start_index):
+
+def config_text_value(key, default=""):
+    value = common.get_configs(key)
+
+    if value is None:
+        return default
+
+    text_value = str(value).strip()
+
+    if not text_value:
+        return default
+
+    return text_value
+
+
+def get_alpamayo_backend():
+    backend = config_text_value("ALPAMAYO_BACKEND", "alpamayo_r1").lower()
+
+    aliases = {
+        "old": "alpamayo_r1",
+        "r1": "alpamayo_r1",
+        "oom_free": "alpamayo_r1",
+        "oom-free": "alpamayo_r1",
+        "alpamayo": "alpamayo_r1",
+        "alpamayo2": "alpamayo2_super",
+        "alpamayo2-super": "alpamayo2_super",
+        "alpamayo2_super": "alpamayo2_super",
+    }
+
+    return aliases.get(backend, backend)
+
+
+def alpamayo2_super_output_dir_from_jobs(ready_jobs):
+    for job in ready_jobs:
+        alpamayo_json = str(job.get("alpamayo_json", "")).strip()
+
+        if alpamayo_json:
+            return os.path.dirname(alpamayo_json)
+
+    return os.path.join(PROJECT_ROOT, "alpamayo_outputs", "alpamayo_json")
+
+
+def write_alpamayo2_super_ready_jobs(ready_jobs):
+    output_path = os.path.join(
+        WORKFLOW_OUTPUTS,
+        "alpamayo2_super_ready_jobs.jsonl",
+    )
+
+    with open(output_path, "w", encoding="utf-8") as handle:
+        for job in ready_jobs:
+            handle.write(json.dumps(job, ensure_ascii=False) + "\n")
+
+    return output_path
+
+
+def run_alpamayo2_super_batch(ready_jobs, start_index=0):
+    adapter_script = config_text_value("ALPAMAYO2_SUPER_ADAPTER_SCRIPT", "")
+
+    if not adapter_script:
+        raise RuntimeError(
+            "ALPAMAYO_BACKEND is set to alpamayo2_super, but "
+            "ALPAMAYO2_SUPER_ADAPTER_SCRIPT is not configured. "
+            "Keep ALPAMAYO_BACKEND as alpamayo_r1 until the Alpamayo2 Super "
+            "adapter script is implemented."
+        )
+
+    adapter_script = as_project_path(adapter_script)
+
+    if not os.path.isfile(adapter_script):
+        raise RuntimeError(
+            "ALPAMAYO2_SUPER_ADAPTER_SCRIPT does not exist: " + adapter_script
+        )
+
+    model_id = config_text_value(
+        "ALPAMAYO2_SUPER_MODEL_ID",
+        "nvidia/Alpamayo2-Super",
+    )
+
+    alpamayo2_python = config_text_value("ALPAMAYO2_SUPER_PYTHON", sys.executable)
+    output_dir = alpamayo2_super_output_dir_from_jobs(ready_jobs)
+    ready_jobs_jsonl = write_alpamayo2_super_ready_jobs(ready_jobs)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    print()
+    print("Running Alpamayo2 Super batch")
+    print("=============================")
+    print("jobs:", len(ready_jobs))
+    print("model_id:", model_id)
+    print("adapter_script:", adapter_script)
+    print("ready_jobs_jsonl:", ready_jobs_jsonl)
+    print("output_dir:", output_dir)
+    print("interpreter:", alpamayo2_python)
+
+    command = [
+        alpamayo2_python,
+        adapter_script,
+        "--jobs-jsonl",
+        ready_jobs_jsonl,
+        "--output-dir",
+        output_dir,
+        "--model-id",
+        model_id,
+    ]
+
+    subprocess.run(command, cwd=PROJECT_ROOT, check=True)
+
+
+def run_alpamayo_batch(ready_jobs, start_index=0):
+    backend = get_alpamayo_backend()
+
+    print()
+    print("Selected Alpamayo backend:", backend)
+
+    if backend == "alpamayo_r1":
+        return run_alpamayo_r1_batch(ready_jobs, start_index)
+
+    if backend == "alpamayo2_super":
+        return run_alpamayo2_super_batch(ready_jobs, start_index)
+
+    raise RuntimeError(
+        "Unknown ALPAMAYO_BACKEND: "
+        + backend
+        + ". Use alpamayo_r1 or alpamayo2_super."
+    )
+
+
+def run_alpamayo_r1_batch(jobs, start_index):
     ensure_dir(WORKFLOW_OUTPUTS)
     manifest_path = normalise_path(
         os.path.join(
@@ -604,7 +731,7 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
         return
 
     ensure_dir(ALPAMAYO_JSON_DIR)
-    manifest_path = write_alpamayo_manifest(missing_jobs, start_index)
+    manifest_path = run_alpamayo_batch(missing_jobs, start_index)
 
     print("")
     print("Running Alpamayo batch")
