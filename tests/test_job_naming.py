@@ -213,6 +213,71 @@ def test_one_failed_job_does_not_abort_the_batch():
     )
 
 
+def test_gate_provenance_is_derived_not_asserted():
+    """decided_by must follow model_called, never be hardcoded.
+
+    call_gemma4_gate() falls back to the heuristic whenever the model will not
+    load -- a missing CUDA compile toolchain is enough, and it only prints. A
+    hardcoded gemma4_gate made every state file claim a decision the model never
+    made, which is the field an analysis of explanation timing would trust.
+    """
+    path = os.path.join(SRC, "gemma_reasoning_module.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    start = source.index('state["explanation"] = {')
+    block = source[start:source.index("}", start)]
+
+    assert '"decided_by": "gemma4_gate",' not in block, (
+        "decided_by is hardcoded again; a heuristic decision would be recorded "
+        "as a Gemma one"
+    )
+    assert "model_called" in block, "decided_by must be derived from model_called"
+    assert "heuristic_gate" in block, "the heuristic path needs its own label"
+
+
+def test_gate_fallback_can_be_made_fatal():
+    """A batch must be able to refuse the silent downgrade to the heuristic."""
+    path = os.path.join(SRC, "gemma_reasoning_module.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    assert '"OPTICARVIS_REQUIRE_GEMMA_GATE", "0"' in source, (
+        "REQUIRE_GEMMA_GATE must exist and default to off"
+    )
+    assert "if REQUIRE_GEMMA_GATE:" in source, (
+        "the fallback path must honour REQUIRE_GEMMA_GATE"
+    )
+
+
+def test_declined_clip_is_not_counted_as_rendered():
+    """The three outcomes must stay distinct in the batch tally.
+
+    The per-clip pipeline exits 0 both when it renders and when the gate
+    declines, so counting on the return code alone overstates what a batch
+    produced.
+    """
+    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    start = source.index("def run_pipeline_one_job")
+    body = source[start:source.index("\ndef ", start + 1)]
+
+    for outcome in ('"rendered"', '"gate_declined"', '"failed"'):
+        assert "return " + outcome in body, (
+            "run_pipeline_one_job must return %s" % outcome
+        )
+
+    assert "job_produced_render(job)" in body, (
+        "the rendered/declined split must check for an actual video, not the "
+        "subprocess return code"
+    )
+
+
 def test_batch_exit_code_survives_a_partial_run():
     """main() may only exit non zero when nothing rendered at all.
 
@@ -227,9 +292,10 @@ def test_batch_exit_code_survives_a_partial_run():
 
     body = source[source.index("\ndef main("):]
 
-    assert "if ready_jobs and not rendered:" in body, (
-        "main() must only fail the run when no job rendered; found a different "
-        "exit condition, which would abort later chunks under main.py"
+    assert 'len(outcomes["failed"]) == len(ready_jobs)' in body, (
+        "main() must only fail the run when every job failed; a partial batch, "
+        "or one the gate declined in full, would otherwise abort later chunks "
+        "under main.py"
     )
 
 

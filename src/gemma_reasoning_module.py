@@ -42,6 +42,10 @@ GEMMA_MODEL_ID = "Gemma4_gate_placeholder"
 # with OPTICARVIS_GEMMA4_MODEL (e.g. google/gemma-4-E2B-it for a faster gate).
 USE_REAL_GEMMA = True
 GEMMA4_MODEL_ID = GEMMA4_MODEL
+
+# Set for a batch run: turns the silent downgrade to the heuristic into an error.
+# Left off by default so a machine without the gate model can still be exercised.
+REQUIRE_GEMMA_GATE = os.environ.get("OPTICARVIS_REQUIRE_GEMMA_GATE", "0") == "1"
 GEMMA4_MAX_NEW_TOKENS = 320
 
 
@@ -415,6 +419,17 @@ def run_gemma4_gate(state, frames):
         return gate_from_model_output(parsed, state, text)
     except Exception as error:
         print("Gemma 4 gate unavailable (%s); using heuristic gate." % error)
+
+        # The fallback is a reasonable default for a smoke run and a bad one for
+        # a batch: the gate is the thing under study, and a missing compile
+        # toolchain is enough to replace it with a heuristic for every city
+        # without failing anything.
+        if REQUIRE_GEMMA_GATE:
+            raise RuntimeError(
+                "Gemma 4 gate could not run and OPTICARVIS_REQUIRE_GEMMA_GATE is "
+                "set: %s" % error
+            )
+
         return None
 
 
@@ -609,10 +624,19 @@ def update_state(state, gate):
         "decision_reason": gate.get("decision_reason"),
     }
 
+    # Derived, never hardcoded. call_gemma4_gate() falls back to dry_run_gate()
+    # whenever the model cannot be loaded or its output will not parse, and that
+    # happens quietly -- a missing CUDA compile toolchain is enough. Claiming
+    # gemma4_gate regardless made every state file assert a decision the model
+    # never made, which is precisely the field an analysis would trust.
+    model_called = bool(gate.get("model_called"))
+
     state["explanation"] = {
         "needed": proper,
         "status": "explain_now" if proper else "do_not_explain",
-        "decided_by": "gemma4_gate",
+        "decided_by": "gemma4_gate" if model_called else "heuristic_gate",
+        "gate_mode": gate.get("mode"),
+        "model_called": model_called,
         "decision_reason": gate.get("decision_reason"),
         "passenger_facing_text": gate.get("passenger_facing_text"),
     }

@@ -236,6 +236,31 @@ def state_json_for(job):
     return normalise_path(os.path.join(WORKFLOW_OUTPUTS, clip_tag(job) + "_workflow_state.json"))
 
 
+def job_produced_render(job):
+    """True when the job's state records a final preview video that exists.
+
+    The renderer only runs when the explanation gate says yes, so the state's
+    outputs are what distinguishes a rendered clip from a declined one -- the
+    per-clip pipeline exits 0 either way.
+    """
+    state_json = state_json_for(job)
+
+    if not os.path.isfile(state_json):
+        return False
+
+    try:
+        with open(state_json, "r", encoding="utf-8") as handle:
+            outputs = json.load(handle).get("outputs", {})
+    except (ValueError, OSError):
+        return False
+
+    for key, path in outputs.items():
+        if "video" in key and path and os.path.isfile(str(path)):
+            return True
+
+    return False
+
+
 def alpamayo_raw_json_path(job):
     return normalise_path(
         os.path.join(
@@ -924,7 +949,7 @@ def run_pipeline_one_job(job, index, total):
         append_master(job, "skipped_missing_alpamayo_json", "missing_alpamayo_json", elapsed)
         print("Skipped: missing_alpamayo_json")
         print("Expected Alpamayo JSON:", job["alpamayo_json"])
-        return False
+        return "failed"
 
     env = job_environment(job)
 
@@ -951,11 +976,19 @@ def run_pipeline_one_job(job, index, total):
             print("Stopping: OPTICARVIS_STOP_ON_JOB_FAILURE is set")
             raise SystemExit(completed.returncode)
 
-        return False
+        return "failed"
 
-    append_master(job, "complete", "pipeline_complete", elapsed)
+    # Exit code 0 covers two different outcomes: a rendered clip, and a clip the
+    # explanation gate declined. Both are correct, but counting a declined clip
+    # as rendered overstates what a batch produced, so they are separated here.
+    if job_produced_render(job):
+        append_master(job, "complete", "pipeline_complete", elapsed)
+        return "rendered"
 
-    return True
+    append_master(job, "complete", "gate_declined", elapsed)
+    print("No render: the explanation gate declined this clip.")
+
+    return "gate_declined"
 
 
 def main():
@@ -1006,35 +1039,41 @@ def main():
 
     run_alpamayo_for_ready_jobs(ready_jobs, start_index)
 
-    rendered = []
-    failed = []
+    outcomes = {"rendered": [], "gate_declined": [], "failed": []}
 
     for offset, job in enumerate(ready_jobs):
-        if run_pipeline_one_job(job, start_index + offset, len(jobs)):
-            rendered.append(job["job_id"])
-        else:
-            failed.append(job["job_id"])
+        result = run_pipeline_one_job(job, start_index + offset, len(jobs))
+        outcomes[result].append(job["job_id"])
 
     print("")
     print("Batch complete.")
-    print("prepared:", len(ready_jobs), "of", len(selected), "| rendered:", len(rendered),
-          "| failed:", len(failed))
+    print("prepared:", len(ready_jobs), "of", len(selected),
+          "| rendered:", len(outcomes["rendered"]),
+          "| gate declined:", len(outcomes["gate_declined"]),
+          "| failed:", len(outcomes["failed"]))
 
-    if failed:
-        print("")
-        print("Jobs that did not render:")
+    # Declined is a result, not a fault: the gate deciding no explanation is
+    # needed is the pipeline working. Failed is listed separately so it is not
+    # buried in the same count.
+    for label, job_ids in (("Gate declined (no render, working as intended)",
+                            outcomes["gate_declined"]),
+                           ("Failed", outcomes["failed"])):
+        if job_ids:
+            print("")
+            print(label + ":")
 
-        for job_id in failed:
-            print("  " + job_id)
+            for job_id in job_ids:
+                print("  " + job_id)
 
     print("Master index:", MASTER_INDEX_JSONL)
 
-    # Non zero only when nothing rendered at all, matching the convention the
+    # Non zero only when every job outright failed, matching the convention the
     # planner wrapper and adapter already use. main.py drives the chunks with
     # check=True, so exiting non zero on a partial batch would abort every later
     # chunk -- reintroducing at the chunk level exactly the failure this change
-    # removes at the job level.
-    if ready_jobs and not rendered:
+    # removes at the job level. A batch the gate declined in full is not an
+    # error, so it does not count towards this.
+    if ready_jobs and len(outcomes["failed"]) == len(ready_jobs):
         raise SystemExit(1)
 
 
