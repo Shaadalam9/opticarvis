@@ -96,6 +96,29 @@ def get_pred_xyz(payload):
     return points
 
 
+def get_pred_yaw(payload):
+    """Per-waypoint heading (radians) from the planner's rotation matrices.
+
+    The renderer advances the drawn trajectory along the plan as the car
+    drives; that frame transfer needs the pose at each waypoint, not just its
+    position. Yaw about up is atan2(R10, R00) of the planar rotation.
+    """
+    import math
+
+    pred_rot = payload.get("pred_rot", {})
+    flat = flatten(pred_rot.get("values", []))
+    numbers = [float(item) for item in flat if isinstance(item, (int, float))]
+
+    yaws = []
+
+    for start in range(0, len(numbers) - 8, 9):
+        r00 = numbers[start]
+        r10 = numbers[start + 3]
+        yaws.append(round(math.atan2(r10, r00), 6))
+
+    return yaws
+
+
 def mean(values):
     if not values:
         return 0.0
@@ -238,6 +261,9 @@ def build_state(payload):
         "explanation_needed": None,
         "explanation_status": explanation_status,
         "trajectory_points_xyz": points,
+        "trajectory_yaw_rad": get_pred_yaw(payload),
+        "trajectory_dt_s": 0.1,
+        "planner_t0_local_s": payload.get("run_meta", {}).get("t0_local_s"),
         "important_note": "Alpamayo is context only. Gemma4 decides whether this is a proper time to explain.",
     }
 

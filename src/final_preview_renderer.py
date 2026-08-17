@@ -33,6 +33,7 @@ adjusted by eye.
 """
 
 import json
+import math
 import os
 import sys
 
@@ -1563,6 +1564,101 @@ def build_occlusion_mask(result, height, width):
     return occlusion.astype(np.float32) / 255.0
 
 
+def load_planner_track():
+    """The full planner plan for per-frame advancing: points, yaws, t0, step.
+
+    Returns None when the context lacks the yaw/t0 fields (older context files)
+    -- the planner ribbon then stays static, the pre-advance behaviour.
+    """
+    if not os.path.isfile(ALPAMAYO_CONTEXT_JSON):
+        return None
+
+    with open(ALPAMAYO_CONTEXT_JSON, "r", encoding="utf-8") as handle:
+        context = json.load(handle)
+
+    raw_points = context.get("trajectory_points_xyz")
+    raw_yaws = context.get("trajectory_yaw_rad")
+    t0 = context.get("planner_t0_local_s")
+    step = context.get("trajectory_dt_s")
+
+    if not raw_points or not raw_yaws or t0 is None or not step:
+        return None
+
+    count = min(len(raw_points), len(raw_yaws))
+
+    if count < 4:
+        return None
+
+    # Mirror FLU into the renderer's right-positive frame consistently:
+    # lateral AND yaw flip together, or the frame transfer rotates the wrong way.
+    points = [
+        (float(p[0]), PLANNER_LATERAL_SIGN * float(p[1]))
+        for p in raw_points[:count]
+    ]
+    yaws = [PLANNER_LATERAL_SIGN * float(y) for y in raw_yaws[:count]]
+
+    return {"points": points, "yaws": yaws, "t0_s": float(t0), "step_s": float(step)}
+
+
+def advance_planner_trajectory(track, clip_time_s):
+    """The remaining plan, re-expressed in the pose the plan has reached.
+
+    Drawn static, the already-driven part of the plan stays painted on the
+    road and the curve sits at the wrong distance -- too early before the
+    planned moment's position, too late after it. Advancing assumes the car
+    follows its own plan, which is exactly the claim the ribbon is making.
+    """
+    elapsed = max(0.0, clip_time_s - track["t0_s"])
+    position = elapsed / track["step_s"]
+    index = int(position)
+    frac = position - index
+    points = track["points"]
+    yaws = track["yaws"]
+
+    if index >= len(points) - 2:
+        return None
+
+    # Pose along the plan, interpolated between waypoints.
+    px = points[index][0] + frac * (points[index + 1][0] - points[index][0])
+    py = points[index][1] + frac * (points[index + 1][1] - points[index][1])
+    yaw = yaws[index] + frac * (yaws[index + 1] - yaws[index])
+
+    cos_y = math.cos(yaw)
+    sin_y = math.sin(yaw)
+    remaining = []
+
+    for x, y in points[index + 1:]:
+        dx = x - px
+        dy = y - py
+        remaining.append((cos_y * dx + sin_y * dy, -sin_y * dx + cos_y * dy))
+
+    remaining = [(x, y) for x, y in remaining if x > MIN_FORWARD_M]
+
+    if len(remaining) < 2:
+        return None
+
+    return remaining
+
+
+def planner_geometry_for_frame(track, frame_index, fps):
+    """Per-frame ribbon geometry from the advanced plan, or None when the
+    plan's horizon is exhausted (the caller falls back to perception)."""
+    if track is None or not fps:
+        return None
+
+    remaining = advance_planner_trajectory(track, frame_index / fps)
+
+    if remaining is None:
+        return None
+
+    geometry = build_ribbon_geometry(remaining)
+
+    if geometry is not None:
+        geometry["traj"] = None  # chevrons, matching the perception ribbon
+
+    return geometry
+
+
 def load_path_geometry():
     traj = load_trajectory_points()
     if traj is None:
@@ -2097,6 +2193,11 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
+    planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
+
+    if RIBBON_SOURCE == "planner" and planner_track is None:
+        print("Planner ribbon requested but the context lacks yaw/t0; "
+              "drawing the static planner path.")
 
     ramp, label_per_frame = build_anim_schedule(timeline, frame_count, fps)
     on_frames = int((ramp > 0.001).sum())
@@ -2247,8 +2348,13 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
         vo_pts = vo_trajs[index] if (vo_trajs is not None and index < len(vo_trajs)) else None
 
+        frame_geometry = geometry
+
+        if RIBBON_SOURCE == "planner":
+            frame_geometry = planner_geometry_for_frame(planner_track, index, fps)
+
         frame_overlay, frame_near_v, frame_far_v = resolve_frame_overlay(
-            road_binary, height, width, overlay, geometry, aim_state, lookahead_offset,
+            road_binary, height, width, overlay, frame_geometry, aim_state, lookahead_offset,
             lane_data=lane_data, lane_state=lane_state, vo_pts=vo_pts, vo_state=vo_state,
             chevron_phase_m=(index / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
         base = (orig.astype(np.float32) * (1.0 - BACKGROUND_DIM_ALPHA * ramp_value)).astype(np.uint8)
@@ -2368,6 +2474,11 @@ def render_video(effect_plan, vo_track=None):
     # the ribbon overlay once.
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
+    planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
+
+    if RIBBON_SOURCE == "planner" and planner_track is None:
+        print("Planner ribbon requested but the context lacks yaw/t0; "
+              "drawing the static planner path.")
 
     if overlay is None:
         print("Could not build road path geometry; rendering without a path ribbon.")
@@ -2498,8 +2609,13 @@ def render_video(effect_plan, vo_track=None):
             else None
         )
 
+        frame_geometry = geometry
+
+        if RIBBON_SOURCE == "planner":
+            frame_geometry = planner_geometry_for_frame(planner_track, rendered_frames, fps)
+
         frame_overlay, _, _ = resolve_frame_overlay(
-            road_binary, height, width, overlay, geometry, aim_state,
+            road_binary, height, width, overlay, frame_geometry, aim_state,
             lane_data=lane_data, lane_state=lane_state,
             vo_pts=vo_pts, vo_state=vo_state,
             chevron_phase_m=(rendered_frames / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
