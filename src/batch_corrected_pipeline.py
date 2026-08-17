@@ -65,6 +65,7 @@ from pipeline_common import (
     append_jsonl,
     ffmpeg_path,
     normalise_path,
+    transcode_h264,
 )
 
 # common.py and the config files are in the main opticarvis folder.
@@ -123,6 +124,24 @@ SKIP_EXISTING_STATE = os.environ.get("OPTICARVIS_SKIP_EXISTING_STATE", "0") == "
 # while debugging a single job, when the first traceback is the thing you want.
 STOP_ON_JOB_FAILURE = os.environ.get("OPTICARVIS_STOP_ON_JOB_FAILURE", "0") == "1"
 
+# Failure isolation cuts the other way when the cause is systemic -- a broken
+# venv fails every job identically, two minutes at a time. A run of consecutive
+# failures with nothing succeeding in between is that signature, so the batch
+# stops there. 0 disables the guard.
+MAX_CONSECUTIVE_FAILURES = int(
+    os.environ.get("OPTICARVIS_MAX_CONSECUTIVE_FAILURES", "5")
+)
+
+# Decide the Gemma gate for a whole round in one process (gemma_gate_batch.py)
+# instead of paying the full model load inside every per-job pipeline. 0 falls
+# back to the per-job gate.
+GATE_BATCH = os.environ.get("OPTICARVIS_GATE_BATCH", "1") == "1"
+
+# Replace each rendered mp4v master with an H.264 encode of itself, same
+# filename, so the state's output paths stay valid. The batch render path never
+# transcoded; only the manual render_timeline_clip.py did.
+BATCH_H264 = os.environ.get("OPTICARVIS_BATCH_H264", "1") == "1"
+
 VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi"]
 DOWNLOAD_MISSING_SOURCE_VIDEOS = True
 
@@ -175,6 +194,71 @@ WHEN_END_LOCAL_S = 15.60
 
 SOURCE_VIDEO_CACHE = {}
 MISSING_SOURCE_VIDEO_IDS = set()
+
+# Sources pulled from the file server, eligible for deletion under
+# DELETE_FTP_VIDEOS_AFTER_USE once no unresolved city still needs them. A video
+# already on disk that we did not download is never deleted. The registry is a
+# file beside the videos, not just process memory: the prefetch script and an
+# aborted batch both download in other processes, and memory-only tracking made
+# their files permanently ineligible for cleanup.
+DOWNLOADED_SOURCE_VIDEOS = set()
+
+
+def downloaded_registry_path():
+    return normalise_path(os.path.join(SOURCE_VIDEO_DIR, ".downloaded_by_opticarvis"))
+
+
+def register_downloaded_source(local_path):
+    DOWNLOADED_SOURCE_VIDEOS.add(local_path)
+
+    try:
+        with open(downloaded_registry_path(), "a", encoding="utf-8") as handle:
+            handle.write(local_path + "\n")
+    except OSError:
+        pass
+
+
+def downloaded_sources_on_record():
+    """In-process downloads plus the registry left by other processes."""
+    recorded = set(DOWNLOADED_SOURCE_VIDEOS)
+
+    try:
+        with open(downloaded_registry_path(), "r", encoding="utf-8") as handle:
+            for line in handle:
+                path = line.strip()
+
+                if path:
+                    recorded.add(path)
+    except OSError:
+        pass
+
+    return recorded
+
+
+def forget_downloaded_source(local_path):
+    DOWNLOADED_SOURCE_VIDEOS.discard(local_path)
+    remaining = downloaded_sources_on_record()
+    remaining.discard(local_path)
+
+    try:
+        with open(downloaded_registry_path(), "w", encoding="utf-8") as handle:
+            for path in sorted(remaining):
+                handle.write(path + "\n")
+    except OSError:
+        pass
+
+# Aliases so far have carried every video on one host (tue5); trying the last
+# successful alias first saves four 404 round-trips per video.
+PREFERRED_FTP_ALIAS = [None]
+
+
+def ftp_aliases_in_preference_order():
+    preferred = PREFERRED_FTP_ALIAS[0]
+
+    if preferred in FTP_ALIASES:
+        return [preferred] + [alias for alias in FTP_ALIASES if alias != preferred]
+
+    return list(FTP_ALIASES)
 
 
 def as_project_path(path_value):
@@ -474,16 +558,23 @@ def download_source_video_from_ftp(video_id):
 
     session.headers.update({"User-Agent": "opticarvis-batch-downloader/1.0"})
 
-    for alias in FTP_ALIASES:
+    for alias in ftp_aliases_in_preference_order():
         direct_url = urljoin(base_url, "v/" + alias + "/files/" + filename_with_ext)
         response = fetch_url(session, direct_url, stream=True)
 
         if response is not None:
             local_path = save_video_response(response, filename_with_ext, direct_url)
-            SOURCE_VIDEO_CACHE[video_id] = local_path
-            return local_path
 
-    for alias in FTP_ALIASES:
+            # save_video_response returns None for an empty body (an error page
+            # served with 200, a truncated transfer). Registering that None
+            # poisons the cache and crashes the cleanup sweep; try elsewhere.
+            if local_path:
+                PREFERRED_FTP_ALIAS[0] = alias
+                SOURCE_VIDEO_CACHE[video_id] = local_path
+                register_downloaded_source(local_path)
+                return local_path
+
+    for alias in ftp_aliases_in_preference_order():
         browse_url = urljoin(base_url, "v/" + alias + "/browse")
         found_url = crawl_for_video_url(session, filename_with_ext, browse_url)
 
@@ -494,8 +585,12 @@ def download_source_video_from_ftp(video_id):
 
         if response is not None:
             local_path = save_video_response(response, filename_with_ext, found_url)
-            SOURCE_VIDEO_CACHE[video_id] = local_path
-            return local_path
+
+            if local_path:
+                PREFERRED_FTP_ALIAS[0] = alias
+                SOURCE_VIDEO_CACHE[video_id] = local_path
+                register_downloaded_source(local_path)
+                return local_path
 
     logger.warning("Source video %s was not found on the FTP server", filename_with_ext)
     MISSING_SOURCE_VIDEO_IDS.add(video_id)
@@ -922,7 +1017,9 @@ def prepare_one_job(job, index, total):
         elapsed = time.time() - started
         append_master(job, "skipped_existing_state", existing_state, elapsed)
         print("Skipped existing state:", existing_state)
-        return False
+        # An intentional skip, not a failure: counting it as one made a fully
+        # skipped re-run exit non zero and trip the systemic-failure guard.
+        return "skipped"
 
     ok, message = extract_clip(job)
 
@@ -930,13 +1027,16 @@ def prepare_one_job(job, index, total):
         elapsed = time.time() - started
         append_master(job, "skipped_" + message, message, elapsed)
         print("Skipped:", message)
-        return False
+        return "failed"
 
     print("Clip ready:", message)
-    return True
+    return "ready"
 
 
-def run_pipeline_one_job(job, index, total):
+def run_pipeline_one_job(job, index, total, gate_decision=None):
+    """Render one prepared job. gate_decision: True/False when the batched gate
+    already decided (state file holds it); None to let the per-job pipeline
+    decide as before."""
     print("")
     print("=" * 80)
     print("Pipeline job %d/%d: %s" % (index + 1, total, job["job_id"]))
@@ -951,7 +1051,18 @@ def run_pipeline_one_job(job, index, total):
         print("Expected Alpamayo JSON:", job["alpamayo_json"])
         return "failed"
 
+    # With a batched gate, the decision already sits in the state file, so a
+    # declined clip costs nothing further and an approved one skips stages 1-2.
+    if gate_decision is False:
+        elapsed = time.time() - started
+        append_master(job, "complete", "gate_declined", elapsed)
+        print("No render: the explanation gate declined this clip.")
+        return "gate_declined"
+
     env = job_environment(job)
+
+    if gate_decision is True:
+        env["OPTICARVIS_GATE_PRECOMPUTED"] = "1"
 
     completed = subprocess.run(
         [sys.executable, PIPELINE_SCRIPT],
@@ -982,6 +1093,9 @@ def run_pipeline_one_job(job, index, total):
     # explanation gate declined. Both are correct, but counting a declined clip
     # as rendered overstates what a batch produced, so they are separated here.
     if job_produced_render(job):
+        if BATCH_H264:
+            transcode_job_renders(job)
+
         append_master(job, "complete", "pipeline_complete", elapsed)
         return "rendered"
 
@@ -989,6 +1103,198 @@ def run_pipeline_one_job(job, index, total):
     print("No render: the explanation gate declined this clip.")
 
     return "gate_declined"
+
+
+def transcode_job_renders(job):
+    """Replace each mp4v master with an H.264 encode under the same filename.
+
+    Same filename on purpose: the state's output paths stay valid, and a re-run
+    that finds the file simply skips the job. A failed transcode keeps the
+    master -- a worse codec is not a failed render.
+    """
+    state_json = state_json_for(job)
+
+    try:
+        with open(state_json, "r", encoding="utf-8") as handle:
+            outputs = json.load(handle).get("outputs", {})
+    except (ValueError, OSError):
+        return
+
+    for key, path in outputs.items():
+        if "video" not in key or not path or not os.path.isfile(str(path)):
+            continue
+
+        path = str(path)
+        temp_path = path + ".h264.tmp.mp4"
+
+        # A run interrupted mid-transcode leaves the partial behind; clear it
+        # rather than letting ffmpeg append confusion to it.
+        if os.path.isfile(temp_path):
+            os.remove(temp_path)
+
+        try:
+            transcode_h264(path, temp_path, remove_source=False)
+            os.replace(temp_path, path)
+            print("Transcoded to H.264:", path)
+        except Exception as error:
+            print("H.264 transcode failed for %s (%s); keeping the mp4v master."
+                  % (path, type(error).__name__))
+
+            if os.path.isfile(temp_path):
+                os.remove(temp_path)
+
+
+def gate_decisions_for_jobs(jobs, start_index):
+    """Decide the gate for every job in one gemma_gate_batch.py process.
+
+    Returns {job_id: True/False/None}; None means no decision was produced and
+    the job should count as failed. Stale state files are removed first so a
+    decision can only ever come from this run.
+    """
+    decisions = {}
+
+    if not jobs:
+        return decisions
+
+    for job in jobs:
+        state_json = state_json_for(job)
+
+        if os.path.isfile(state_json):
+            os.remove(state_json)
+
+    jobs_path = normalise_path(
+        os.path.join(
+            WORKFLOW_OUTPUTS,
+            "gate_batch_jobs_" + str(start_index) + ".jsonl",
+        )
+    )
+
+    with open(jobs_path, "w", encoding="utf-8") as handle:
+        for job in jobs:
+            handle.write(json.dumps(job, ensure_ascii=False) + "\n")
+
+    command = [
+        sys.executable,
+        os.path.join(SRC_DIR, "gemma_gate_batch.py"),
+        "--jobs-jsonl",
+        jobs_path,
+    ]
+
+    # No check: decisions are read from the state files, and a driver that died
+    # partway leaves the undecided jobs as None.
+    subprocess.run(command, cwd=SRC_DIR)
+
+    for job in jobs:
+        state_json = state_json_for(job)
+        decision = None
+
+        if os.path.isfile(state_json):
+            try:
+                with open(state_json, "r", encoding="utf-8") as handle:
+                    explanation = json.load(handle).get("explanation")
+            except (ValueError, OSError):
+                explanation = None
+
+            # Stage 1 alone writes explanation.needed = None ("pending"), so a
+            # gate that crashed between the stages leaves a state file whose
+            # needed is None -- undecided, not declined. bool(None) would have
+            # silently recorded every such crash as a legitimate decline.
+            if (
+                isinstance(explanation, dict)
+                and explanation.get("needed") in (True, False)
+                and explanation.get("status") in ("explain_now", "do_not_explain")
+            ):
+                decision = bool(explanation["needed"])
+
+        decisions[job["job_id"]] = decision
+
+    return decisions
+
+
+def group_jobs_by_city(jobs):
+    """Ordered [(city_key, [jobs...])], each city's jobs in window order.
+
+    Jobs from a builder without window_index sort stably at 0, so a one-job
+    city behaves exactly as before: a single round.
+    """
+    groups = {}
+    order = []
+
+    for job in jobs:
+        key = job.get("city_index", job.get("job_id"))
+
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+
+        groups[key].append(job)
+
+    for key in order:
+        groups[key].sort(key=lambda item: item.get("window_index", 0))
+
+    return [(key, groups[key]) for key in order]
+
+
+def source_video_references(jobs):
+    """video path -> set of city keys whose unresolved windows still need it."""
+    references = {}
+
+    for job in jobs:
+        path = normalise_path(str(job.get("source_video", "")))
+
+        if path:
+            references.setdefault(path, set()).add(
+                job.get("city_index", job.get("job_id"))
+            )
+
+    return references
+
+
+def cleanup_resolved_sources(city_results, source_refs):
+    """Delete downloaded sources no unresolved city still references.
+
+    Only videos on the download record are eligible -- this process's own plus
+    the registry written by the prefetch script or an earlier aborted run.
+    Anything else on disk is the user's, not ours to reclaim.
+    """
+    if not DELETE_FTP_VIDEOS_AFTER_USE:
+        return
+
+    recorded = downloaded_sources_on_record()
+
+    for path, cities in list(source_refs.items()):
+        if path not in recorded:
+            continue
+
+        if all(city in city_results for city in cities) and os.path.isfile(path):
+            size_gib = os.path.getsize(path) / (1024 ** 3)
+            os.remove(path)
+            forget_downloaded_source(path)
+            del source_refs[path]
+            print("Deleted downloaded source (%.2f GiB, no unresolved city needs it): %s"
+                  % (size_gib, path))
+
+
+def cleanup_downloaded_sources_final(referenced_sources):
+    """End-of-run sweep for recorded downloads this batch no longer needs.
+
+    referenced_sources: sources jobs OUTSIDE this invocation's slice may still
+    need (main.py chunking, start_index) -- those stay, and stay on record so a
+    later invocation reclaims them.
+    """
+    if not DELETE_FTP_VIDEOS_AFTER_USE:
+        return
+
+    for path in sorted(downloaded_sources_on_record()):
+        if path in referenced_sources:
+            continue
+
+        if os.path.isfile(path):
+            size_gib = os.path.getsize(path) / (1024 ** 3)
+            os.remove(path)
+            print("Deleted downloaded source (%.2f GiB): %s" % (size_gib, path))
+
+        forget_downloaded_source(path)
 
 
 def main():
@@ -1027,30 +1333,170 @@ def main():
     print("alpamayo_config:", ALPAMAYO_CONFIG)
     print("alpamayo_json_dir:", ALPAMAYO_JSON_DIR)
 
-    ready_jobs = []
-    downloaded_source_videos_for_cleanup = set()
+    city_groups = group_jobs_by_city(selected)
+    source_refs = source_video_references(selected)
+    max_rounds = max((len(group) for _, group in city_groups), default=0)
 
+    # Sources that jobs OUTSIDE this slice reference must survive the cleanup
+    # sweep: main.py chunking and start_index can split the job list, and a
+    # chunk boundary can even split one city's windows -- warn about that,
+    # since the later invocation cannot know this one already rendered the city
+    # except through the render-credit check below.
+    selected_ids = {id(job) for job in selected}
+    outside_sources = {
+        normalise_path(str(job.get("source_video", "")))
+        for job in jobs
+        if id(job) not in selected_ids and job.get("source_video")
+    }
 
-    for offset, job in enumerate(selected):
-        ready = prepare_one_job(job, start_index + offset, len(jobs))
+    for city_key, group in city_groups:
+        total_windows = sum(
+            1 for job in jobs
+            if job.get("city_index", job.get("job_id")) == city_key
+        )
 
-        if ready:
-            ready_jobs.append(job)
+        if total_windows > len(group):
+            print("")
+            print("WARNING: city %s has %d window(s) outside this run's slice; "
+                  "run the whole city in one invocation to avoid duplicate or "
+                  "missed renders." % (city_key, total_windows - len(group)))
 
-    run_alpamayo_for_ready_jobs(ready_jobs, start_index)
+    # How many rendered clips resolve a city. 0 keeps the old uncapped meaning:
+    # never resolve early, attempt every emitted window.
+    clips_wanted = max(int(os.environ.get("OPTICARVIS_CLIPS_PER_CITY", "1")), 0)
 
-    outcomes = {"rendered": [], "gate_declined": [], "failed": []}
+    outcomes = {"rendered": [], "gate_declined": [], "failed": [], "skipped": []}
+    city_results = {}
+    city_render_counts = {}
+    consecutive_failures = [0]
+    attempted = 0
 
-    for offset, job in enumerate(ready_jobs):
-        result = run_pipeline_one_job(job, start_index + offset, len(jobs))
-        outcomes[result].append(job["job_id"])
+    def note_failure(job_id):
+        outcomes["failed"].append(job_id)
+        consecutive_failures[0] += 1
+
+        if MAX_CONSECUTIVE_FAILURES and consecutive_failures[0] >= MAX_CONSECUTIVE_FAILURES:
+            print("")
+            print("%d consecutive failures with no success in between -- this "
+                  "looks systemic, not per-clip. Stopping. Raise or disable "
+                  "OPTICARVIS_MAX_CONSECUTIVE_FAILURES to override."
+                  % consecutive_failures[0])
+            raise SystemExit(2)
+
+    def credit_render(city_key):
+        city_render_counts[city_key] = city_render_counts.get(city_key, 0) + 1
+
+        if clips_wanted and city_render_counts[city_key] >= clips_wanted:
+            city_results[city_key] = "rendered"
+
+    # A window rendered by an earlier invocation counts towards the city's
+    # target now, so a resumed or re-sliced run does not render the city again.
+    for city_key, group in city_groups:
+        for job in group:
+            if job_produced_render(job):
+                print("Existing render found for %s; crediting %s"
+                      % (job["job_id"], city_key))
+                credit_render(city_key)
+
+    for round_index in range(max_rounds):
+        round_jobs = [
+            (city_key, group[round_index])
+            for city_key, group in city_groups
+            if city_key not in city_results and round_index < len(group)
+        ]
+
+        if not round_jobs:
+            break
+
+        if max_rounds > 1:
+            print("")
+            print("#" * 80)
+            print("Window round %d: %d unresolved city(ies)"
+                  % (round_index + 1, len(round_jobs)))
+            print("#" * 80)
+
+        prepared = []
+
+        for city_key, job in round_jobs:
+            attempted += 1
+            status = prepare_one_job(job, attempted - 1, len(selected))
+
+            if status == "ready":
+                prepared.append((city_key, job))
+            elif status == "skipped":
+                outcomes["skipped"].append(job["job_id"])
+            else:
+                note_failure(job["job_id"])
+
+        run_alpamayo_for_ready_jobs([job for _key, job in prepared], start_index)
+
+        decisions = (
+            gate_decisions_for_jobs(
+                [job for _key, job in prepared
+                 if os.path.isfile(job["alpamayo_json"])],
+                start_index,
+            )
+            if GATE_BATCH
+            else {}
+        )
+
+        round_base = attempted - len(prepared)
+
+        for prepared_index, (city_key, job) in enumerate(prepared):
+            if GATE_BATCH and decisions.get(job["job_id"]) is None:
+                # The driver produced no decision for this job (planner JSON
+                # missing, or the gate crashed on it). Falling back to the full
+                # per-job pipeline here would quietly reintroduce the per-clip
+                # model load the batch exists to avoid.
+                print("")
+                print("No gate decision for %s; counting it as failed."
+                      % job["job_id"])
+                append_master(job, "failed_gate", "no_gate_decision", 0.0)
+                note_failure(job["job_id"])
+                continue
+
+            result = run_pipeline_one_job(
+                job,
+                round_base + prepared_index,
+                len(selected),
+                gate_decision=decisions.get(job["job_id"]) if GATE_BATCH else None,
+            )
+
+            if result == "rendered":
+                outcomes["rendered"].append(job["job_id"])
+                credit_render(city_key)
+                consecutive_failures[0] = 0
+            elif result == "gate_declined":
+                outcomes["gate_declined"].append(job["job_id"])
+                consecutive_failures[0] = 0
+            else:
+                note_failure(job["job_id"])
+
+        # A city whose windows are exhausted is finished too. With at least one
+        # render it still counts as rendered -- it just fell short of a >1
+        # target; only a city with none is reported as unfired.
+        for city_key, group in city_groups:
+            if city_key not in city_results and len(group) <= round_index + 1:
+                city_results[city_key] = (
+                    "rendered" if city_render_counts.get(city_key) else "no_window_fired"
+                )
+
+        cleanup_resolved_sources(city_results, source_refs)
+
+    cleanup_downloaded_sources_final(outside_sources)
+
+    cities_rendered = sum(1 for value in city_results.values() if value == "rendered")
+    cities_unfired = sum(1 for value in city_results.values() if value == "no_window_fired")
 
     print("")
     print("Batch complete.")
-    print("prepared:", len(ready_jobs), "of", len(selected),
-          "| rendered:", len(outcomes["rendered"]),
-          "| gate declined:", len(outcomes["gate_declined"]),
-          "| failed:", len(outcomes["failed"]))
+    print("cities: %d rendered, %d with no approved window, of %d"
+          % (cities_rendered, cities_unfired, len(city_groups)))
+    print("windows: %d attempted | rendered: %d | gate declined: %d | failed: %d "
+          "| skipped: %d"
+          % (attempted, len(outcomes["rendered"]),
+             len(outcomes["gate_declined"]), len(outcomes["failed"]),
+             len(outcomes["skipped"])))
 
     # Declined is a result, not a fault: the gate deciding no explanation is
     # needed is the pipeline working. Failed is listed separately so it is not
@@ -1067,13 +1513,14 @@ def main():
 
     print("Master index:", MASTER_INDEX_JSONL)
 
-    # Non zero only when every job outright failed, matching the convention the
-    # planner wrapper and adapter already use. main.py drives the chunks with
-    # check=True, so exiting non zero on a partial batch would abort every later
-    # chunk -- reintroducing at the chunk level exactly the failure this change
-    # removes at the job level. A batch the gate declined in full is not an
-    # error, so it does not count towards this.
-    if ready_jobs and len(outcomes["failed"]) == len(ready_jobs):
+    # Non zero only when every genuinely attempted window outright failed --
+    # intentional skips do not count. main.py drives the chunks with check=True,
+    # so exiting non zero on a partial batch would abort every later chunk --
+    # reintroducing at the chunk level exactly the failure this change removes
+    # at the job level. A batch the gate declined in full is not an error.
+    genuinely_attempted = attempted - len(outcomes["skipped"])
+
+    if genuinely_attempted and len(outcomes["failed"]) == genuinely_attempted:
         raise SystemExit(1)
 
 

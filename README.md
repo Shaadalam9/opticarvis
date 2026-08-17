@@ -391,7 +391,13 @@ needs no code edits.
 | `OPTICARVIS_UFLDV2_DIR` | `<external>/UFLDv2` | UFLDv2 checkout |
 | `OPTICARVIS_VIDEO_ID` | `TuCsyBF3nHU` | Clip identity for per-clip artefacts |
 | `OPTICARVIS_SEGMENT_START_S` | `4630` | Segment start, used in artefact names. `OPTICARVIS_SEGMENT_START_TIME_S` is accepted as a legacy alias |
-| `OPTICARVIS_CLIPS_PER_CITY` | `1` | Clips `clip_job_builder.py` emits per city. `0` removes the cap and falls back to the footage budget |
+| `OPTICARVIS_CLIPS_PER_CITY` | `1` | Rendered clips wanted per city. `0` removes the cap and falls back to the footage budget |
+| `OPTICARVIS_WINDOWS_PER_CITY` | `CLIPS_PER_CITY` | Candidate windows tried per city, in stride order, until the Gemma gate approves one. The gate defaults to `do_not_explain`, so first windows frequently yield no video |
+| `OPTICARVIS_GATE_BATCH` | `1` | Decide the gate for a whole window round in one process (loads Gemma once) instead of once per clip. `0` restores the per-job gate |
+| `OPTICARVIS_REQUIRE_GEMMA_GATE` | `0` | `1` makes a Gemma load failure an error instead of a silent fallback to the heuristic gate. Set it for batch runs |
+| `OPTICARVIS_BATCH_H264` | `1` | Re-encode each rendered mp4v master as H.264 in place. `0` keeps the masters |
+| `OPTICARVIS_MAX_CONSECUTIVE_FAILURES` | `5` | Stop the batch after this many consecutive job failures with no success between (systemic-failure guard). `0` disables |
+| `OPTICARVIS_STOP_ON_JOB_FAILURE` | `0` | `1` stops the batch at the first failed job (debugging) |
 | `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv` |
 | `OPTICARVIS_CITY_FOOTAGE_S` | `3600` | Secondary per-city budget. It accrues `STRIDE_S` per clip, not `CLIP_LENGTH_S`, so it is a poor way to ask for *n* clips — use `OPTICARVIS_CLIPS_PER_CITY` |
 | `OPTICARVIS_CLIP_LENGTH_S` | `30` | Clip length in seconds |

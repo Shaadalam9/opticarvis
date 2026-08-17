@@ -188,35 +188,16 @@ VALID_DISPLAY_TARGETS = {
     "none",
 }
 
-_gemma_model = None
-
-
 def load_gemma4():
-    """Load and cache the Gemma 4 multimodal model + processor."""
-    global _gemma_model
-    if _gemma_model is None:
-        import torch
-        from transformers import AutoModelForImageTextToText, AutoProcessor
+    """Load the Gemma 4 multimodal model + processor, cached process-wide.
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        # local_files_only avoids slow/hanging Hub metadata calls; the weights
-        # are expected to be cached already (download once with huggingface-cli).
-        # A machine that has not cached them needs
-        # OPTICARVIS_HF_LOCAL_FILES_ONLY=0 for the first run.
-        processor = AutoProcessor.from_pretrained(
-            GEMMA4_MODEL_ID,
-            padding_side="left",
-            local_files_only=HF_LOCAL_FILES_ONLY,
-        )
-        model = AutoModelForImageTextToText.from_pretrained(
-            GEMMA4_MODEL_ID,
-            dtype=torch.bfloat16,
-            low_cpu_mem_usage=True,
-            attn_implementation="sdpa",
-            local_files_only=HF_LOCAL_FILES_ONLY,
-        ).to(device).eval()
-        _gemma_model = (processor, model)
-    return _gemma_model
+    The cache lives in gemma_model_cache, not here: gemma_gate_batch.py reloads
+    this module per job (its paths and job identity are fixed at import time),
+    and a module-level cache would be dropped on every reload.
+    """
+    from gemma_model_cache import get_gemma4
+
+    return get_gemma4(GEMMA4_MODEL_ID, HF_LOCAL_FILES_ONLY)
 
 
 def build_gemma_messages(state, frames):

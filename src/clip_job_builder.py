@@ -51,6 +51,16 @@ STRIDE_S = float(os.environ.get("OPTICARVIS_STRIDE_S", "60"))
 # behaviour.
 CLIPS_PER_CITY = int(os.environ.get("OPTICARVIS_CLIPS_PER_CITY", "1"))
 
+# Candidate windows per city, tried in order until the Gemma gate approves one.
+# The gate's design default is do_not_explain, and on ordinary driving it
+# declines with high confidence -- both live-gate test clips did -- so a city's
+# first window frequently yields no video at all. Each job carries its
+# window_index; the batch runner stops trying a city once a window renders.
+# Defaults to CLIPS_PER_CITY so nothing changes unless it is raised.
+WINDOWS_PER_CITY = int(
+    os.environ.get("OPTICARVIS_WINDOWS_PER_CITY", str(max(CLIPS_PER_CITY, 1)))
+)
+
 OUTPUT_JSONL = normalise_path(
     os.environ.get(
         "OPTICARVIS_CLIP_JOBS",
@@ -217,8 +227,17 @@ def row_intervals(row):
 
 
 def city_quota_reached(jobs):
-    """True once this city already has its full allowance of clips."""
-    return CLIPS_PER_CITY > 0 and len(jobs) >= CLIPS_PER_CITY
+    """True once this city already has its full allowance of candidate windows.
+
+    CLIPS_PER_CITY is how many videos the batch should render per city;
+    WINDOWS_PER_CITY (>= CLIPS_PER_CITY) is how many candidates it may try to
+    get them, so the emission cap is the window count. CLIPS_PER_CITY=0 means
+    uncapped (footage budget only), and that must win over the window default.
+    """
+    if CLIPS_PER_CITY <= 0:
+        return False
+
+    return len(jobs) >= max(WINDOWS_PER_CITY, CLIPS_PER_CITY)
 
 
 def build_jobs_for_city(row, city_index):
@@ -301,6 +320,7 @@ def build_jobs_for_city(row, city_index):
                     "segment_start_time_s": float(start_int),
                     "clip_length_s": CLIP_LENGTH_S,
                     "stride_s": STRIDE_S,
+                    "window_index": len(jobs),
                     "time_of_day": interval["time_of_day"],
                     "clip_video": clip_video,
                     "alpamayo_json": alpamayo_json,

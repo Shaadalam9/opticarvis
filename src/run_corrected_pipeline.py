@@ -99,8 +99,18 @@ def print_final_video(outputs):
 def main():
     print_job_header()
 
-    run_step("workflow_runner.py")
-    run_step("gemma_reasoning_module.py")
+    # The batch runner can decide the gate for a whole round in one process
+    # (gemma_gate_batch.py), which loads Gemma once instead of once per clip.
+    # In that mode the state already holds the decision, and re-running stage 1
+    # here would overwrite it -- workflow_runner rebuilds the state file.
+    gate_precomputed = os.environ.get("OPTICARVIS_GATE_PRECOMPUTED", "0") == "1"
+
+    if gate_precomputed:
+        print("")
+        print("Gate precomputed by gemma_gate_batch.py; skipping stages 1-2.")
+    else:
+        run_step("workflow_runner.py")
+        run_step("gemma_reasoning_module.py")
 
     state = load_state()
     explanation = state.get("explanation", {})

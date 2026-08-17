@@ -278,6 +278,121 @@ def test_declined_clip_is_not_counted_as_rendered():
     )
 
 
+def batch_source():
+    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_round_loop_stops_a_city_after_a_render():
+    """The window scan must resolve a city on its first rendered window."""
+    source = batch_source()
+    body = source[source.index("\ndef main("):]
+
+    assert "group_jobs_by_city" in body, "main() must group windows by city"
+    assert 'city_results[city_key] = "rendered"' in body, (
+        "a rendered window must resolve its city so later windows are skipped"
+    )
+    assert '"no_window_fired"' in body, (
+        "a city whose windows are exhausted must be resolved, not retried forever"
+    )
+
+
+def test_downloaded_sources_are_reclaimed():
+    """DELETE_FTP_VIDEOS_AFTER_USE was configured but never implemented."""
+    source = batch_source()
+
+    assert "register_downloaded_source(local_path)" in source, (
+        "downloads must be registered for cleanup -- durably, since the "
+        "prefetch script and an aborted run download in other processes"
+    )
+    assert "def cleanup_resolved_sources" in source
+    assert "cleanup_downloaded_sources_final(" in source[source.index("\ndef main("):], (
+        "main() must sweep leftovers at the end of the run"
+    )
+    assert "if not DELETE_FTP_VIDEOS_AFTER_USE:" in source, (
+        "cleanup must respect the config flag"
+    )
+    assert "if local_path:" in source, (
+        "an empty download returns None from save_video_response and must not "
+        "be registered or cached"
+    )
+
+
+def test_systemic_failure_guard_exists():
+    """N consecutive failures with no success between must stop the batch."""
+    source = batch_source()
+
+    assert '"OPTICARVIS_MAX_CONSECUTIVE_FAILURES", "5"' in source
+    assert "consecutive_failures[0] >= MAX_CONSECUTIVE_FAILURES" in source
+
+    # The streak must reset in BOTH success branches of the pipeline loop.
+    # Checking for one bare reset passed even with the resets deleted, since
+    # the initialisation matched the same substring.
+    body = source[source.index("\ndef main("):]
+    rendered_branch = body[body.index('result == "rendered"'):]
+    assert "consecutive_failures[0] = 0" in rendered_branch[:400], (
+        "a rendered clip must reset the failure streak"
+    )
+    declined_branch = body[body.index('result == "gate_declined"'):]
+    assert "consecutive_failures[0] = 0" in declined_branch[:400], (
+        "a gate decline is a success for the streak and must reset it"
+    )
+
+    # Prepare-stage failures must feed the same guard: a down FTP server or a
+    # broken ffmpeg fails every window in prepare, and a guard that only
+    # watches the pipeline loop never fires.
+    prepare_loop = body[body.index("status = prepare_one_job"):]
+    assert "note_failure(" in prepare_loop[:400], (
+        "prepare failures must count towards the systemic-failure streak"
+    )
+
+
+def test_undecided_gate_is_not_a_decline():
+    """explanation.needed=None (stage 1's 'pending') must read as undecided.
+
+    A gate that crashes between the stages leaves needed=None in the state;
+    bool(None) recorded every such crash as a legitimate decline.
+    """
+    source = batch_source()
+    start = source.index("def gate_decisions_for_jobs")
+    body = source[start:source.index("\ndef ", start + 1)]
+
+    assert 'explanation.get("needed") in (True, False)' in body, (
+        "the readback must require a real boolean decision"
+    )
+    assert '"explain_now"' in body and '"do_not_explain"' in body, (
+        "the readback must also require a decided status"
+    )
+
+    main_body = source[source.index("\ndef main("):]
+    assert "no_gate_decision" in main_body, (
+        "an undecided job must be recorded as failed, not fall back to the "
+        "full per-job pipeline"
+    )
+
+
+def test_city_render_target_and_credit():
+    """CLIPS_PER_CITY is a per-city render target, and prior renders count.
+
+    Resolving a city on its first render broke CLIPS_PER_CITY>1 and =0, and a
+    resumed run re-rendered cities whose video already existed.
+    """
+    source = batch_source()
+    body = source[source.index("\ndef main("):]
+
+    assert "clips_wanted" in body and "city_render_counts" in body, (
+        "cities must resolve against a render target, not a boolean"
+    )
+    assert "credit_render(" in body
+    assert "job_produced_render(job)" in body, (
+        "renders from earlier invocations must be credited before the rounds"
+    )
+    # exhausted-with-renders is still a rendered city, not an unfired one
+    assert '"rendered" if city_render_counts.get(city_key) else "no_window_fired"' in body
+
+
 def test_batch_exit_code_survives_a_partial_run():
     """main() may only exit non zero when nothing rendered at all.
 
@@ -292,10 +407,13 @@ def test_batch_exit_code_survives_a_partial_run():
 
     body = source[source.index("\ndef main("):]
 
-    assert 'len(outcomes["failed"]) == len(ready_jobs)' in body, (
-        "main() must only fail the run when every job failed; a partial batch, "
-        "or one the gate declined in full, would otherwise abort later chunks "
-        "under main.py"
+    assert 'len(outcomes["failed"]) == genuinely_attempted' in body, (
+        "main() must only fail the run when every genuinely attempted window "
+        "failed; a partial batch, a fully skipped resume, or one the gate "
+        "declined in full, would otherwise abort later chunks under main.py"
+    )
+    assert 'attempted - len(outcomes["skipped"])' in body, (
+        "intentional skips must not count towards the failure exit rule"
     )
 
 
@@ -330,6 +448,7 @@ def build_jobs(clips_per_city, cities=3):
         "clip_job_builder",
         {
             "OPTICARVIS_CLIPS_PER_CITY": clips_per_city,
+            "OPTICARVIS_WINDOWS_PER_CITY": None,
             "OPTICARVIS_CLIP_JOBS": os.path.join(directory, "jobs.jsonl"),
             "OPTICARVIS_CLIP_JOBS_SUMMARY": os.path.join(directory, "summary.json"),
         },
@@ -348,6 +467,42 @@ def build_jobs(clips_per_city, cities=3):
 def test_one_clip_per_city_by_default():
     for city_jobs in build_jobs(clips_per_city=1):
         assert len(city_jobs) == 1, "expected one clip per city, got %d" % len(city_jobs)
+
+
+def test_windows_per_city_emits_ordered_candidates():
+    """WINDOWS_PER_CITY candidates, stride apart, indexed in order."""
+    directory = tempfile.mkdtemp()
+    mapping = os.path.join(directory, "mapping.csv")
+    write_mapping(mapping, 2)
+
+    builder = reload_with_env(
+        "clip_job_builder",
+        {
+            "OPTICARVIS_CLIPS_PER_CITY": "1",
+            "OPTICARVIS_WINDOWS_PER_CITY": "4",
+            "OPTICARVIS_CLIP_JOBS": os.path.join(directory, "jobs.jsonl"),
+            "OPTICARVIS_CLIP_JOBS_SUMMARY": os.path.join(directory, "summary.json"),
+        },
+    )
+
+    with open(mapping, "r", encoding="utf-8-sig") as handle:
+        for index, row in enumerate(csv.DictReader(handle), start=1):
+            city_jobs, _intervals = builder.build_jobs_for_city(row, index)
+
+            assert len(city_jobs) == 4, "expected 4 windows, got %d" % len(city_jobs)
+            assert [job["window_index"] for job in city_jobs] == [0, 1, 2, 3]
+
+            starts = [job["segment_start_time_s"] for job in city_jobs]
+            strides = [b - a for a, b in zip(starts, starts[1:])]
+            assert all(s == builder.STRIDE_S for s in strides), (
+                "windows must advance by the stride, got %r" % strides
+            )
+
+
+def test_windows_default_matches_clips_cap():
+    """Without OPTICARVIS_WINDOWS_PER_CITY nothing changes: one job per city."""
+    for city_jobs in build_jobs(clips_per_city=1):
+        assert len(city_jobs) == 1
 
 
 def test_clips_per_city_cap_is_respected():
