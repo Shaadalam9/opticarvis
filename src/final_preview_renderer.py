@@ -257,7 +257,9 @@ RIBBON_AIM_CAP_PX = 70.0          # DEAD while RIBBON_AIM_BIAS is 0
 # EMA weight on the far aim across frames (lower = slower, more natural; the
 # far end eases rather than darts).
 RIBBON_AIM_SMOOTH = 0.07
-RIBBON_NEAR_ROWS = 150.0          # ribbon near end, rows below the horizon (~8.7 m)
+# Ribbon near end: past the frame bottom (~4.2 m), so the frame edge clips it.
+# A frozen near hem at a constant row read as a sticker, not paint.
+RIBBON_NEAR_ROWS = 300.0
 # ribbon far end, rows below the horizon (~21 m). Shortened from 48 (~27 m): the far field is
 # where any per-frame estimate noise is most visible, and the last 6 m of ribbon carried most of
 # the perceived jitter on the turn clip while adding little information.
@@ -1333,55 +1335,93 @@ def draw_centerline_dashes(layer, centre_arr, colour=255):
 
 
 def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255):
-    """Flowing direction chevrons along the ribbon centreline.
+    """Chevrons as WORLD ground-plane marks, projected like the band itself.
 
-    Chevrons sit at fixed world distances along the path (period CHEVRON_PERIOD_M)
-    with the whole pattern advanced by phase_m, so incrementing phase_m per frame
-    makes them march forward. Each chevron's on-screen size follows its depth, so
-    the pattern foreshortens like real road paint. Drawn as a coverage layer
-    (grey value = colour) exactly like the dashes it replaces.
+    The previous implementation built each chevron in image space (screen
+    tangent, screen perpendicular) -- a rigid 2D glyph that rotated with the
+    centreline's on-screen direction. On curves that produced arm angles up to
+    70 degrees from horizontal, geometrically impossible for road paint, and
+    the illusion collapsed. Here every chevron vertex is laid out in ground
+    coordinates (apex on the path, arms mirrored about the LOCAL WORLD tangent)
+    and projected through the same flat-ground mapping as the band, so a curve
+    yaws the marks on the asphalt and foreshortening does the rest.
+
+    phase_m is the vehicle's travelled distance: marks sit at fixed positions
+    ON THE GROUND (arclength k*P - phase along the path window), so as the car
+    advances the pattern streams toward the viewer at exactly the road
+    texture's rate and is driven over -- the opposite of the old forward march,
+    which was the strongest anti-grounding cue in the clip.
     """
     if len(centre_arr) < 3:
         return
+
     vs = centre_arr[:, 1]
     us = centre_arr[:, 0]
-    order = np.argsort(vs)                 # ascending v (far -> near)
-    vs_sorted = vs[order]
-    us_sorted = us[order]
+    order = np.argsort(vs)[::-1]           # near (large v) -> far
+    v_s = vs[order].astype(np.float64)
+    u_s = us[order].astype(np.float64)
+    keep = v_s > HORIZON_V + 4.0
+    v_s, u_s = v_s[keep], u_s[keep]
 
-    d_near = CAM_FOCAL_PX * CAM_HEIGHT_M / (float(vs.max()) - HORIZON_V)
-    d_far = CAM_FOCAL_PX * CAM_HEIGHT_M / (float(vs.min()) - HORIZON_V)
+    if len(v_s) < 3:
+        return
 
-    distance = d_near + (phase_m % CHEVRON_PERIOD_M) - CHEVRON_PERIOD_M
-    while distance < d_far:
-        distance += CHEVRON_PERIOD_M
-        if distance < d_near or distance > d_far:
-            continue
-        v = HORIZON_V + CAM_FOCAL_PX * CAM_HEIGHT_M / distance
-        if not (vs_sorted[0] <= v <= vs_sorted[-1]):
-            continue
-        u = float(np.interp(v, vs_sorted, us_sorted))
-        # local forward direction of the path (toward smaller v)
-        v_ahead = max(float(vs_sorted[0]), v - CHEVRON_TANGENT_LOOKBACK_PX)
-        u_ahead = float(np.interp(v_ahead, vs_sorted, us_sorted))
-        tangent = np.array([u_ahead - u, v_ahead - v], dtype=np.float64)
-        norm = float(np.hypot(*tangent))
-        if norm < 1e-6:
-            continue
-        tangent /= norm
-        perp = np.array([-tangent[1], tangent[0]])
+    # image centreline -> world ground path (forward metres, lateral metres)
+    depth = CAM_FOCAL_PX * CAM_HEIGHT_M / (v_s - HORIZON_V)
+    lateral = (u_s - VANISH_U) * depth / CAM_FOCAL_PX
+    seg = np.hypot(np.diff(depth), np.diff(lateral))
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(arc[-1])
 
-        length_px = CAM_FOCAL_PX * CAM_HEIGHT_M * CHEVRON_LEN_M / (distance * distance)
-        half_px = CAM_FOCAL_PX * CHEVRON_HALF_M / distance
-        point = np.array([u, v])
-        apex = point + tangent * (0.6 * length_px)
-        tail_l = point - tangent * (0.4 * length_px) - perp * half_px
-        tail_r = point - tangent * (0.4 * length_px) + perp * half_px
-        thickness = int(clamp(round((v - HORIZON_V) * 0.02), 1, 5))
+    if total < CHEVRON_PERIOD_M * 0.5:
+        return
+
+    def world_at(s_pos):
+        d_i = float(np.interp(s_pos, arc, depth))
+        y_i = float(np.interp(s_pos, arc, lateral))
+        s_a = min(s_pos + 0.5, total)
+        s_b = max(s_pos - 0.5, 0.0)
+        t_x = float(np.interp(s_a, arc, depth) - np.interp(s_b, arc, depth))
+        t_y = float(np.interp(s_a, arc, lateral) - np.interp(s_b, arc, lateral))
+        norm = math.hypot(t_x, t_y)
+
+        if norm < 1e-9:
+            t_x, t_y, norm = 1.0, 0.0, 1.0
+
+        return d_i, y_i, t_x / norm, t_y / norm
+
+    def project(d_w, y_w):
+        d_w = max(d_w, 0.3)
+        return (VANISH_U + CAM_FOCAL_PX * y_w / d_w,
+                HORIZON_V + CAM_FOCAL_PX * CAM_HEIGHT_M / d_w)
+
+    # marks fixed on the ground: arclength (k*P - travelled) mod P walks the
+    # pattern toward the car as it drives
+    s_pos = (-phase_m) % CHEVRON_PERIOD_M - CHEVRON_PERIOD_M
+
+    while s_pos < total:
+        s_pos += CHEVRON_PERIOD_M
+
+        if s_pos < 0.0 or s_pos > total:
+            continue
+
+        d_i, y_i, t_x, t_y = world_at(s_pos)
+        n_x, n_y = -t_y, t_x
+
+        apex = project(d_i + t_x * 0.6 * CHEVRON_LEN_M,
+                       y_i + t_y * 0.6 * CHEVRON_LEN_M)
+        tail_l = project(d_i - t_x * 0.4 * CHEVRON_LEN_M - n_x * CHEVRON_HALF_M,
+                         y_i - t_y * 0.4 * CHEVRON_LEN_M - n_y * CHEVRON_HALF_M)
+        tail_r = project(d_i - t_x * 0.4 * CHEVRON_LEN_M + n_x * CHEVRON_HALF_M,
+                         y_i - t_y * 0.4 * CHEVRON_LEN_M + n_y * CHEVRON_HALF_M)
+
+        v_mark = HORIZON_V + CAM_FOCAL_PX * CAM_HEIGHT_M / max(d_i, 0.3)
+        thickness = int(clamp(round((v_mark - HORIZON_V) * 0.02), 1, 5))
+
         for tail in (tail_l, tail_r):
             cv2.line(layer,
-                     tuple(np.round(apex).astype(int)),
-                     tuple(np.round(tail).astype(int)),
+                     (int(round(apex[0])), int(round(apex[1]))),
+                     (int(round(tail[0])), int(round(tail[1]))),
                      colour, thickness, cv2.LINE_AA)
 
 
@@ -1426,11 +1466,18 @@ def build_path_overlay(geometry, height, width, chevron_phase_m=0.0):
     cv2.polylines(rails_cov, [left], False, 255, RAIL_STROKE_PX, cv2.LINE_AA)
     cv2.polylines(rails_cov, [right], False, 255, RAIL_STROKE_PX, cv2.LINE_AA)
 
+    band_mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(band_mask, [geometry["polygon"]], 255)
+
     dash_cov = np.zeros((height, width), dtype=np.uint8)
     if geometry.get("traj") is not None:
         draw_world_dashes(dash_cov, geometry["traj"], colour=255)
     else:
         draw_centerline_chevrons(dash_cov, geometry["centre"], chevron_phase_m, colour=255)
+
+    # A mark is road paint only while it stays inside the band; a stroke
+    # escaping the rails onto bare asphalt breaks the illusion instantly.
+    dash_cov = cv2.bitwise_and(dash_cov, band_mask)
 
     a_shadow = (shadow_cov.astype(np.float32) / 255.0) * profile_col * CONTACT_SHADOW_ALPHA
     a_body = (body_cov.astype(np.float32) / 255.0) * profile_col * BODY_ALPHA
@@ -1562,6 +1609,73 @@ def build_occlusion_mask(result, height, width):
         occlusion = cv2.GaussianBlur(occlusion, (feather, feather), 0)
 
     return occlusion.astype(np.float32) / 255.0
+
+
+def travelled_distance_per_frame(vo_track):
+    """Cumulative metres driven, per frame, from the VO track's ego poses.
+
+    Chevron marks live at fixed points ON THE GROUND; the pattern phase must
+    advance by the distance actually driven, or the marks slide against the
+    asphalt. Arclength is robust even when the track's heading failed its
+    validation -- position deltas do not carry the yaw bias.
+    """
+    if vo_track is None:
+        return None
+
+    poses = vo_track.get("ego_pose_right_positive")
+
+    if not poses or len(poses) < 2:
+        return None
+
+    distances = [0.0]
+
+    for (x0, y0, _p0), (x1, y1, _p1) in zip(poses, poses[1:]):
+        distances.append(distances[-1] + math.hypot(x1 - x0, y1 - y0))
+
+    return distances
+
+
+class LateralMotionTracker(object):
+    """Per-frame horizontal scene shift (full-res px), for anchor feed-forward.
+
+    The band's lateral anchors are EMA-smoothed in SCREEN coordinates, so when
+    the ego yaw swings the whole image sideways the anchors lag and the band
+    detaches from the road (measured at a 10:1 road-to-band motion mismatch).
+    Feeding the measured per-frame shift forward moves every anchor WITH the
+    world; the smoothing then only fights estimation noise, as intended.
+    """
+
+    def __init__(self, frame_width):
+        self.scale = frame_width / 320.0
+        self.previous = None
+
+    def update(self, frame_bgr):
+        gray = cv2.resize(
+            cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY), (320, 180)
+        ).astype(np.float32)[:90, :]
+        shift = 0.0
+
+        if self.previous is not None:
+            (dx, _dy), _response = cv2.phaseCorrelate(self.previous, gray)
+            shift = clamp(dx * self.scale, -40.0, 40.0)
+
+        self.previous = gray
+
+        return shift
+
+
+def apply_lateral_feed_forward(shift_px, lane_state, aim_state, vo_state):
+    if abs(shift_px) < 1e-6:
+        return
+
+    if lane_state and lane_state.get("near_u") is not None:
+        lane_state["near_u"] += shift_px
+
+    if aim_state and aim_state.get("far_u") is not None:
+        aim_state["far_u"] += shift_px
+
+    if vo_state and vo_state.get("applied") is not None:
+        vo_state["applied"] = vo_state["applied"] + shift_px
 
 
 def load_planner_track():
@@ -2267,6 +2381,8 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
+    travelled_m = travelled_distance_per_frame(vo_track)
+    lateral_tracker = LateralMotionTracker(width)
     planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
     planner_ego_poses = (
         ego_poses_from_track(vo_track) if RIBBON_SOURCE == "planner" else None
@@ -2429,15 +2545,25 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
         vo_pts = vo_trajs[index] if (vo_trajs is not None and index < len(vo_trajs)) else None
 
+        apply_lateral_feed_forward(
+            lateral_tracker.update(orig), lane_state, aim_state, vo_state)
+
         frame_geometry = geometry
 
         if RIBBON_SOURCE == "planner":
             frame_geometry = planner_geometry_for_frame(planner_track, index, fps, planner_ego_poses)
 
+        # phase = distance actually driven: marks hold their ground positions
+        phase_m = (
+            travelled_m[index]
+            if travelled_m is not None and index < len(travelled_m)
+            else (index / fps) * CHEVRON_SPEED_MPS if fps else 0.0
+        )
+
         frame_overlay, frame_near_v, frame_far_v = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state, lookahead_offset,
             lane_data=lane_data, lane_state=lane_state, vo_pts=vo_pts, vo_state=vo_state,
-            chevron_phase_m=(index / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
+            chevron_phase_m=phase_m)
         base = (orig.astype(np.float32) * (1.0 - BACKGROUND_DIM_ALPHA * ramp_value)).astype(np.uint8)
         reveal = reveal_rows_for(ramp_value, frame_near_v, frame_far_v, height)
         blend_path(base, frame_overlay, occlusion, gain=reveal)
@@ -2555,6 +2681,8 @@ def render_video(effect_plan, vo_track=None):
     # the ribbon overlay once.
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
+    travelled_m = travelled_distance_per_frame(vo_track)
+    lateral_tracker = LateralMotionTracker(width)
     planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
     planner_ego_poses = (
         ego_poses_from_track(vo_track) if RIBBON_SOURCE == "planner" else None
@@ -2697,16 +2825,25 @@ def render_video(effect_plan, vo_track=None):
             else None
         )
 
+        apply_lateral_feed_forward(
+            lateral_tracker.update(result.orig_img), lane_state, aim_state, vo_state)
+
         frame_geometry = geometry
 
         if RIBBON_SOURCE == "planner":
             frame_geometry = planner_geometry_for_frame(planner_track, rendered_frames, fps, planner_ego_poses)
 
+        phase_m = (
+            travelled_m[rendered_frames]
+            if travelled_m is not None and rendered_frames < len(travelled_m)
+            else (rendered_frames / fps) * CHEVRON_SPEED_MPS if fps else 0.0
+        )
+
         frame_overlay, _, _ = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state,
             lane_data=lane_data, lane_state=lane_state,
             vo_pts=vo_pts, vo_state=vo_state,
-            chevron_phase_m=(rendered_frames / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
+            chevron_phase_m=phase_m)
         base = dim_background(result.orig_img)
         blend_path(base, frame_overlay, occlusion)
 
