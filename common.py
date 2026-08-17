@@ -108,7 +108,8 @@ def check_config(config_file_name: str = 'config',
         logger.error('Default config file {} not found.', config_default_file_name)
         return False
     except json.decoder.JSONDecodeError:
-        logger.error('Config file {} badly formatted. Please update based on default.config.', config_default_file_name)
+        logger.error('Config file {} badly formatted. Please update based on default.config.',
+                     config_default_file_name)
         return False
     # check length of each file
     if len(config) < len(default):

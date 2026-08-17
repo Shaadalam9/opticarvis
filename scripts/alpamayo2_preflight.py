@@ -18,7 +18,6 @@ import importlib
 import os
 import platform
 import shutil
-import subprocess
 import sys
 
 
@@ -194,7 +193,8 @@ def main():
         print("%d check(s) failed, %d warning(s) -- fix the failures before a batch run."
               % (report.failed, report.warned))
         print("Plumbing can still be exercised without the model:")
-        print("    python scripts/alpamayo2_super_wrapper.py --clips m.csv --output-dir out --config c.json --self-test")
+        print("    python scripts/alpamayo2_super_wrapper.py --clips m.csv "
+              "--output-dir out --config c.json --self-test")
         return 1
 
     print("All required checks passed (%d warning(s))." % report.warned)

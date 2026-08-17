@@ -5,9 +5,7 @@ Alpamayo provides trajectory, reasoning, action and uncertainty context.
 Gemma4 later decides whether this is a proper time to explain.
 """
 
-import json
 import math
-import os
 
 from pipeline_common import (
     VIDEO_ID,

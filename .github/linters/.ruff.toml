@@ -1,0 +1,9 @@
+# Super-linter runs ruff with its own maximal default configuration, which
+# fails the codebase's established conventions (percent-formatting, C-style
+# structure). This file pins ruff to the same severity flake8 enforces here:
+# pyflakes correctness plus pycodestyle errors, at the project line length.
+line-length = 119
+target-version = "py312"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

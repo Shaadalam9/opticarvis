@@ -20,7 +20,6 @@ Run from the repo root, in the project venv:
     python src/depth_estimation_module.py
 """
 
-import json
 import os
 
 import cv2

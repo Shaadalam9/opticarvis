@@ -19,7 +19,6 @@ Run from the repo root, in the project venv:
 ultralytics is a declared dependency, so `uv sync --frozen` installs it.
 """
 
-import json
 import os
 
 import cv2
@@ -335,7 +334,8 @@ def main():
         "notes": [
             "This stage grounds the Alpamayo and Gemma reasoning in visual objects or regions.",
             "For crosswalk cases, YOLO segmentation detects people but does not segment the crosswalk itself.",
-            "A later specialised road scene segmentation model can add lane, road, pavement, stop line, and crosswalk masks.",
+            "A later specialised road scene segmentation model can add lane, road, "
+            "pavement, stop line, and crosswalk masks.",
         ],
     }
 

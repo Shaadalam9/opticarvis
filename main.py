@@ -30,7 +30,6 @@ CLIP_JOB_BUILDER = os.path.join(SRC_DIR, "clip_job_builder.py")
 BATCH_PIPELINE = os.path.join(SRC_DIR, "batch_corrected_pipeline.py")
 
 
-
 def config_int(key, default):
     value = common.get_configs(key)
 

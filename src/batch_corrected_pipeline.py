@@ -51,7 +51,7 @@ from tqdm import tqdm
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 
-from pipeline_common import (
+from pipeline_common import (  # noqa: E402
     PROJECT_ROOT,
     WORKFLOW_OUTPUTS,
     ALPAMAYO_OUTPUTS,
@@ -72,7 +72,7 @@ from pipeline_common import (
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import common
+import common  # noqa: E402
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -246,6 +246,7 @@ def forget_downloaded_source(local_path):
                 handle.write(path + "\n")
     except OSError:
         pass
+
 
 # Aliases so far have carried every video on one host (tue5); trying the last
 # successful alias first saves four 404 round-trips per video.
@@ -474,6 +475,7 @@ def save_video_response(response, filename_with_ext, source_url):
 
     return final_path
 
+
 def fetch_url(session, url, stream):
     response = session.get(url, timeout=FTP_TIMEOUT_SECONDS, stream=stream)
     logger.debug("GET %s -> %d", url, response.status_code)
@@ -658,7 +660,6 @@ def extract_clip(job):
     job["source_video"] = source_video
 
     return True, "clip_extracted"
-
 
 
 def config_text_value(key, default=""):

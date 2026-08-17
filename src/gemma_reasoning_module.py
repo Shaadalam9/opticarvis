@@ -188,6 +188,7 @@ VALID_DISPLAY_TARGETS = {
     "none",
 }
 
+
 def load_gemma4():
     """Load the Gemma 4 multimodal model + processor, cached process-wide.
 
@@ -319,7 +320,6 @@ def gate_from_model_output(parsed, state, raw_text):
     }
 
 
-
 def flatten_gemma_messages_for_processor(messages):
     """Convert role/content messages to plain text plus image list for processors without chat templates."""
     text_blocks = []
@@ -418,7 +418,10 @@ def build_prompt(state, frame_payload):
     context = state.get("alpamayo_context", {})
     prompt = {
         "task": "Decide whether this is a proper time for an AV to explain its behaviour to a passenger.",
-        "instruction": "Default to do_not_explain. Explain only when the vehicle behaviour is noticeable or potentially confusing and visual grounding would clarify a hidden, ambiguous, non local, or unusual safety margin reason beyond what the passenger can already see.",
+        "instruction": "Default to do_not_explain. Explain only when the vehicle behaviour "
+                       "is noticeable or potentially confusing and visual grounding would "
+                       "clarify a hidden, ambiguous, non local, or unusual safety margin "
+                       "reason beyond what the passenger can already see.",
         "alpamayo_context": {
             "action": context.get("alpamayo_action"),
             "reasoning_trace": context.get("alpamayo_reasoning_trace"),
@@ -578,7 +581,8 @@ def write_compat_gemma_json(gate):
         "proper_time_to_explain": gate.get("proper_time_to_explain"),
         "semantic_reason": gate.get("decision_reason"),
         "causal_objects": ["pedestrians"] if gate.get("display_target") == "pedestrians_and_crosswalk" else [],
-        "causal_regions": ["crosswalk", "ego future path"] if gate.get("display_target") == "pedestrians_and_crosswalk" else [],
+        "causal_regions": (["crosswalk", "ego future path"]
+                           if gate.get("display_target") == "pedestrians_and_crosswalk" else []),
         "recommended_display_target": gate.get("display_target"),
         "recommended_display_text": gate.get("passenger_facing_text"),
         "confidence": gate.get("confidence"),

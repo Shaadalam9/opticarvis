@@ -187,7 +187,6 @@ def row_intervals(row):
 
     for video_index, video_id in enumerate(videos):
         start_values = starts[video_index] if video_index < len(starts) else [0]
-        time_values = times[video_index] if video_index < len(times) else []
 
         if not isinstance(start_values, list):
             start_values = [start_values]

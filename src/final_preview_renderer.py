@@ -41,8 +41,6 @@ import numpy as np
 from ultralytics import YOLO
 
 from pipeline_common import (
-    VIDEO_ID,
-    SEGMENT_START_TIME_S,
     CLIP_VIDEO,
     STATE_JSON,
     YOLO_SEG_MODEL,
@@ -177,8 +175,9 @@ MIN_FORWARD_M = 0.5
 # They are named here so apply_resolution_scaling() can reach them: each one is
 # an absolute pixel quantity at the reference resolution, and leaving any of
 # them unscaled silently changes the geometry rather than raising.
-DEPTH_HORIZON_EXCLUDE_PX = 30.0   # to_ground: rows nearer the horizon than this are
-                                 # dropped, which sets the MAX metric depth of the fit
+# to_ground: rows nearer the horizon than this are dropped, which sets the MAX
+# metric depth of the fit.
+DEPTH_HORIZON_EXCLUDE_PX = 30.0
 FIT_DEPTH_HORIZON_EXCLUDE_PX = 8.0  # same idea for the road-plane depth fit
 LANE_STRADDLE_GUARD_PX = 4.0      # dead zone each side of centre when pairing boundaries
 LANE_WIDTH_FLOOR_PX = 40.0        # absolute floor on an accepted lane width
@@ -244,23 +243,24 @@ PLANNER_LATERAL_SIGN = float(os.environ.get("OPTICARVIS_PLANNER_LATERAL_SIGN", "
 # aim EMA) cannot be reconstructed after the fact, which is the entire reason
 # the dump exists.
 LAST_RIBBON_GEOMETRY = None
-RIBBON_AIM_BAND = (55.0, 110.0)   # DEAD (kept only because RIBBON_AIM_BIAS is 0): rows that
-                                 # used to be read for road heading
-RIBBON_AIM_BIAS = 0.0             # DISABLED, and deliberately so: aiming the far end at the
-                                 # road-mask centroid drifted the ribbon to the street centre
-                                 # on multi-lane roads. With this at 0 the road mask has NO
-                                 # effect on the ribbon's shape (it is still used for occlusion
-                                 # and the depth fit). Do not re-enable without re-solving the
-                                 # multi-lane drift.
+# RIBBON_AIM_BAND is DEAD (kept only because RIBBON_AIM_BIAS is 0): rows that
+# used to be read for road heading. RIBBON_AIM_BIAS is DISABLED, and
+# deliberately so: aiming the far end at the road-mask centroid drifted the
+# ribbon to the street centre on multi-lane roads. With this at 0 the road
+# mask has NO effect on the ribbon's shape (it is still used for occlusion
+# and the depth fit). Do not re-enable without re-solving the multi-lane
+# drift.
+RIBBON_AIM_BAND = (55.0, 110.0)
+RIBBON_AIM_BIAS = 0.0
 RIBBON_AIM_CAP_PX = 70.0          # DEAD while RIBBON_AIM_BIAS is 0
-RIBBON_AIM_SMOOTH = 0.07          # EMA weight on the far aim across frames (lower = slower,
-                                 # more natural; the far end eases rather than darts)
+# EMA weight on the far aim across frames (lower = slower, more natural; the
+# far end eases rather than darts).
+RIBBON_AIM_SMOOTH = 0.07
 RIBBON_NEAR_ROWS = 150.0          # ribbon near end, rows below the horizon (~8.7 m)
-RIBBON_FAR_ROWS = 62.0           # ribbon far end, rows below the horizon (~21 m).
-                                 # Shortened from 48 (~27 m): the far field is where any
-                                 # per-frame estimate noise is most visible, and the last
-                                 # 6 m of ribbon carried most of the perceived jitter on
-                                 # the turn clip while adding little information.
+# ribbon far end, rows below the horizon (~21 m). Shortened from 48 (~27 m): the far field is
+# where any per-frame estimate noise is most visible, and the last 6 m of ribbon carried most of
+# the perceived jitter on the turn clip while adding little information.
+RIBBON_FAR_ROWS = 62.0
 
 # Look-ahead: bend the ribbon into an upcoming turn using the ego-motion track
 # (ego_motion.py), read LOOKAHEAD_S seconds into the future. During a turn the
@@ -292,24 +292,21 @@ LOOKAHEAD_SMOOTH = 0.10          # EMA weight on the look-ahead offset across fr
 # noise never shows. Off by default; enable per turn-clip render.
 USE_VO_TRAJECTORY = os.environ.get("OPTICARVIS_VO_TRAJECTORY", "0") == "1"
 VO_TURN_LAT_LO = 2.5              # m of path lateral spread below which it stays lane-centered
-VO_TURN_LAT_HI = 5.5              # m at/above which the ribbon is fully VO-shaped
-                                 # Measured separation (in-window lateral, ribbon rows only):
-                                 # straight road peaks at 2.2 m, the real curve runs 4.0-6.2 m, so
-                                 # this band suppresses phantom turns (weight 0.00) while a genuine
-                                 # turn still reaches full weight.
-VO_WEIGHT_SMOOTH = 0.20           # EMA weight on the turn weight across frames. Replaying the
-                                 # turn clip: at 0.08 (+2.5 px step) the drawn bend trailed the
-                                 # instantaneous VO bend by ~0.4 s and stopped ~15 px shy of its
-                                 # full depth; 0.20 + 8 px tracks it closely. The VO path is an
-                                 # integrated trajectory and inherently smooth, so the light
-                                 # smoothing costs no visible jitter.
+# m at/above which the ribbon is fully VO-shaped Measured separation (in-window lateral, ribbon
+# rows only): straight road peaks at 2.2 m, the real curve runs 4.0-6.2 m, so this band
+# suppresses phantom turns (weight 0.00) while a genuine turn still reaches full weight.
+VO_TURN_LAT_HI = 5.5
+# EMA weight on the turn weight across frames. Replaying the turn clip: at 0.08 (+2.5 px step)
+# the drawn bend trailed the instantaneous VO bend by ~0.4 s and stopped ~15 px shy of its full
+# depth; 0.20 + 8 px tracks it closely. The VO path is an integrated trajectory and inherently
+# smooth, so the light smoothing costs no visible jitter.
+VO_WEIGHT_SMOOTH = 0.20
 VO_MAX_STEP_PX = 8.0              # max per-row, per-frame move of the VO contribution
-VO_OFFSET_SMOOTH = 0.35           # EMA on the applied VO offsets before the rate clamp:
-                                 # the raw per-frame VO projection wiggles a few px
-                                 # frame-to-frame, and at full weight that wiggle painted
-                                 # visible jitter on the bend. 0.35 keeps the response
-                                 # inside ~3 frames (no return of the trailing) while
-                                 # averaging the wiggle away.
+# EMA on the applied VO offsets before the rate clamp: the raw per-frame VO projection wiggles a
+# few px frame-to-frame, and at full weight that wiggle painted visible jitter on the bend. 0.35
+# keeps the response inside ~3 frames (no return of the trailing) while averaging the wiggle
+# away.
+VO_OFFSET_SMOOTH = 0.35
 
 # Ego-lane centering (Solution B): detect the lane the car is actually in (from
 # YOLOP lane lines) and center the ribbon between its markings, instead of
@@ -354,8 +351,9 @@ LANE_DILATE_PX = 7                # horizontal dilation to bridge dashed-line ga
 LANE_WIDTH_REF_M = 1.55
 LANE_WIDTH_FRAC_LO = 0.65         # reject pairs narrower than this * expected width
 LANE_WIDTH_FRAC_HI = 1.70         # reject pairs wider than this (spanning two lanes)
-LANE_EXTRAPOLATE_TOL_PX = 25.0    # how far past the lowest detected lane row the ribbon's near
-                                 # row may sit before we stop trusting the (clamped) extrapolation
+# how far past the lowest detected lane row the ribbon's near row may sit before we stop trusting
+# the (clamped) extrapolation
+LANE_EXTRAPOLATE_TOL_PX = 25.0
 
 # Lane-curve fit: unproject the two straddling boundary polylines to the ground
 # plane, fit a curvature-capped quadratic to their midline, and let the ribbon
@@ -368,11 +366,10 @@ LANE_EXTRAPOLATE_TOL_PX = 25.0    # how far past the lowest detected lane row th
 USE_LANE_CURVE = os.environ.get("OPTICARVIS_LANE_CURVE", "1") == "1"
 LANE_CURVE_MAX_K = 0.006          # |quadratic coeff| cap  ->  radius >= ~83 m
 LANE_CURVE_MAX_H = 0.15           # |heading| cap at the near anchor (rad-ish)
-LANE_CURVE_SMOOTH = 0.08          # trust-scaled gain on the tracked heading/curvature.
-                                 # Decomposing the far-row wiggle on the turn clip showed
-                                 # the curve state was the dominant jitter source (anchor
-                                 # 0.69 px, +curve 1.42 px, VO negligible); 0.08 halves it
-                                 # while a gentle bend still acquires within ~0.5 s.
+# trust-scaled gain on the tracked heading/curvature. Decomposing the far-row wiggle on the turn
+# clip showed the curve state was the dominant jitter source (anchor 0.69 px, +curve 1.42 px, VO
+# negligible); 0.08 halves it while a gentle bend still acquires within ~0.5 s.
+LANE_CURVE_SMOOTH = 0.08
 LANE_CURVE_STEP_H = 0.004         # max per-frame heading change (a dropout->redetect used
 LANE_CURVE_STEP_K = 0.00015       # to slam a fresh fit in at full gain: 12 px far-row step)
 LANE_CURVE_DECAY = 0.95           # per-frame decay toward straight when the fit is absent
@@ -406,8 +403,9 @@ BODY_ALPHA = 0.28
 RAILS_ALPHA = 0.64
 DASH_ALPHA = 0.82
 FADE_IN_PX = 16.0
-FADE_OUT_PX = 35.0                # shorter far fade to suit the shorter ribbon (with 55 the
-                                 # fade regions covered most of the 88 remaining rows)
+# shorter far fade to suit the shorter ribbon (with 55 the fade regions covered most of the 88
+# remaining rows)
+FADE_OUT_PX = 35.0
 
 # Subtle contact shadow that grounds the ribbon (offset down, blurred, faded).
 CONTACT_SHADOW_ALPHA = 0.18
@@ -2099,8 +2097,6 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
-    near_v = geometry["near_v"] if geometry else float(height)
-    far_v = geometry["far_v"] if geometry else 0.0
 
     ramp, label_per_frame = build_anim_schedule(timeline, frame_count, fps)
     on_frames = int((ramp > 0.001).sum())
@@ -2274,7 +2270,8 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
             layer = base.copy()
             draw_highlights(layer, selected_persons, BOX_COLOUR_CLOSE, BOX_COLOUR, show_class=False)
             if with_vehicles:
-                draw_highlights(layer, selected_vehicles, VEHICLE_BOX_COLOUR_CLOSE, VEHICLE_BOX_COLOUR, show_class=True)
+                draw_highlights(layer, selected_vehicles, VEHICLE_BOX_COLOUR_CLOSE,
+                                VEHICLE_BOX_COLOUR, show_class=True)
             if label_text:
                 draw_text_panel(layer, label_text)
             if ramp_value >= 0.999:

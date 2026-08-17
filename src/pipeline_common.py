@@ -310,6 +310,7 @@ def current_job_summary():
         "hf_local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
+
 # Backward compatible Alpamayo runtime constants.
 # These are used by batch_corrected_pipeline.py.
 ALPAMAYO_MODEL = os.environ.get("OPTICARVIS_ALPAMAYO_MODEL", "").strip()
@@ -326,6 +327,7 @@ ALPAMAYO_CONFIG_PATH = normalise_path(
     )
 )
 
+
 def alpamayo_extra_args():
     """Return optional extra command line arguments for Alpamayo."""
     import shlex
@@ -337,6 +339,7 @@ def alpamayo_extra_args():
 
     return shlex.split(raw_args)
 
+
 def alpamayo_python():
     """Return the Python interpreter used to run Alpamayo."""
     import sys
@@ -344,6 +347,7 @@ def alpamayo_python():
     return normalise_path(
         os.environ.get("OPTICARVIS_ALPAMAYO_PYTHON", sys.executable)
     )
+
 
 # Semantic segmentation runtime constants.
 # Kept as compatibility names for semantic_segmentation_module.py.
@@ -371,4 +375,3 @@ ROAD_SEG_MODEL = os.environ.get(
     "OPTICARVIS_ROAD_SEG_MODEL",
     os.environ.get("OPTICARVIS_YOLO_SEG_MODEL", "yolo26x-seg.pt"),
 )
-

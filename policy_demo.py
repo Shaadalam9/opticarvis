@@ -205,8 +205,6 @@ SCORE_COLUMNS = [
 ]
 
 
-
-
 # =============================================================================
 # LOGGING
 # =============================================================================
@@ -250,10 +248,13 @@ def build_model_signal_mapping() -> pd.DataFrame:
     rows = [
         {
             "policy_part": "Objects, tracks and density",
-            "automated_signal": "Pedestrian and vehicle detections, object counts, local traffic density and track continuity",
+            "automated_signal": "Pedestrian and vehicle detections, object counts, "
+                                "local traffic density and track continuity",
             "recommended_model_or_repo": "Current YOLOv11 + BoT SORT tracking outputs from the existing pipeline",
-            "model_output_used": "Bounding boxes, classes, confidences, track IDs, frame counts and frame level density",
-            "how_it_defines_when": "Trigger candidate when a tracked pedestrian becomes interaction relevant or density exceeds a threshold",
+            "model_output_used": "Bounding boxes, classes, confidences, track IDs, "
+                                 "frame counts and frame level density",
+            "how_it_defines_when": "Trigger candidate when a tracked pedestrian becomes "
+                                   "interaction relevant or density exceeds a threshold",
             "bo_tunable_parameters": "Detection confidence threshold; density threshold; cue onset; persistence",
             "current_code_status": "Implemented directly from existing YOLOv11 + BoT SORT tracking CSVs",
             "priority": "Core input, always required",
@@ -264,7 +265,8 @@ def build_model_signal_mapping() -> pd.DataFrame:
             "automated_signal": "Road, crossing, pavement, pedestrian, vehicle and obstacle masks",
             "recommended_model_or_repo": "Meta SAM3",
             "model_output_used": "Scene and object masks over time",
-            "how_it_defines_when": "Trigger candidate when pedestrian overlaps a drivable, crossing or occlusion boundary region",
+            "how_it_defines_when": "Trigger candidate when pedestrian overlaps a "
+                                   "drivable, crossing or occlusion boundary region",
             "bo_tunable_parameters": "Mask overlap threshold; interaction margin; cue placement around mask",
             "current_code_status": "Not implemented yet; current fallback uses bbox derived interaction score",
             "priority": "Core next step",
@@ -275,7 +277,8 @@ def build_model_signal_mapping() -> pd.DataFrame:
             "automated_signal": "Relative depth, distance gradient, approaching or retreating motion",
             "recommended_model_or_repo": "Depth Anything 3",
             "model_output_used": "Depth score, depth gradient, approximate closing distance",
-            "how_it_defines_when": "Trigger candidate when pedestrian becomes close or the depth gradient changes quickly",
+            "how_it_defines_when": "Trigger candidate when pedestrian becomes close or "
+                                   "the depth gradient changes quickly",
             "bo_tunable_parameters": "Depth threshold; TTC proxy threshold; early warning offset; persistence",
             "current_code_status": "Proxy implemented through bbox area growth; external depth columns supported",
             "priority": "Core next step",
@@ -286,7 +289,8 @@ def build_model_signal_mapping() -> pd.DataFrame:
             "automated_signal": "Looking direction, posture, crossing related pedestrian attributes",
             "recommended_model_or_repo": "Detection Attribute Fields",
             "model_output_used": "Pedestrian attributes and confidence scores",
-            "how_it_defines_when": "Trigger candidate when attributes imply attention, preparation to cross or ambiguous intent",
+            "how_it_defines_when": "Trigger candidate when attributes imply attention, "
+                                   "preparation to cross or ambiguous intent",
             "bo_tunable_parameters": "Attribute confidence threshold; attribute weights; uncertainty threshold",
             "current_code_status": "External signal slot supported; not run inside this script",
             "priority": "Core next step",
@@ -297,9 +301,11 @@ def build_model_signal_mapping() -> pd.DataFrame:
             "automated_signal": "Crossing probability and uncertainty",
             "recommended_model_or_repo": "EfficientPIE",
             "model_output_used": "Crossing probability and uncertainty per pedestrian or frame",
-            "how_it_defines_when": "Trigger candidate when crossing probability exceeds threshold or uncertainty is high near conflict",
+            "how_it_defines_when": "Trigger candidate when crossing probability exceeds "
+                                   "threshold or uncertainty is high near conflict",
             "bo_tunable_parameters": "Crossing probability threshold; uncertainty threshold; cue duration",
-            "current_code_status": "External crossing_probability slot supported; YOLOv11 + BoT SORT fallback implemented",
+            "current_code_status": "External crossing_probability slot supported; "
+                                   "YOLOv11 + BoT SORT fallback implemented",
             "priority": "Core",
             "source_url": "https://github.com/heinideyibadiaole/EfficientPIE",
         },
@@ -319,7 +325,8 @@ def build_model_signal_mapping() -> pd.DataFrame:
             "automated_signal": "Predicted ego and surrounding agent behaviour",
             "recommended_model_or_repo": "NVIDIA Alpamayo / Alpamayo 1.5",
             "model_output_used": "Planning or reasoning output describing possible future driving actions",
-            "how_it_defines_when": "Trigger candidate when predicted trajectories conflict or planning uncertainty rises",
+            "how_it_defines_when": "Trigger candidate when predicted trajectories "
+                                   "conflict or planning uncertainty rises",
             "bo_tunable_parameters": "Planning horizon; risk threshold; explanation detail level",
             "current_code_status": "External anomaly_score slot supported; not run inside this script",
             "priority": "Core offline when source",
@@ -330,7 +337,8 @@ def build_model_signal_mapping() -> pd.DataFrame:
             "automated_signal": "City, country, time of day, traffic index, density, occlusion and movement features",
             "recommended_model_or_repo": "CROWD metadata plus fused perception signals",
             "model_output_used": "Compact context vector for each clip and frame window",
-            "how_it_defines_when": "Context is fixed for a query; BO conditions on context and tunes display policy only",
+            "how_it_defines_when": "Context is fixed for a query; BO conditions on "
+                                   "context and tunes display policy only",
             "bo_tunable_parameters": "Feature inclusion; scenario grouping; sampling strategy",
             "current_code_status": "Implemented from mapping.csv and YOLOv11 + BoT SORT tracking CSVs",
             "priority": "Core",
@@ -572,7 +580,8 @@ def find_tracking_csvs(mapping_lookup: Dict[Tuple[str, int], Dict[str, object]])
         filtered = filtered[:MAX_TRACKING_CSV_FILES]
 
     logger.info(
-        "CSV discovery: found=%d matched=%d selected=%d bad_name=%d not_mapped=%d no_local_video=%d too_small=%d user_filter=%d local_video_filter=%s",
+        "CSV discovery: found=%d matched=%d selected=%d bad_name=%d not_mapped=%d "
+        "no_local_video=%d too_small=%d user_filter=%d local_video_filter=%s",
         len(candidates),
         before_cap,
         len(filtered),
@@ -685,7 +694,8 @@ def estimate_occlusion_for_frame(person_rows: pd.DataFrame, vehicle_rows: pd.Dat
     y_bottom = np.minimum(person_boxes[:, None, 3], all_boxes[None, :, 3])
     inter_area = np.maximum(0.0, x_right - x_left) * np.maximum(0.0, y_bottom - y_top)
 
-    person_area = np.maximum(0.0, (person_boxes[:, 2] - person_boxes[:, 0]) * (person_boxes[:, 3] - person_boxes[:, 1]))
+    person_area = np.maximum(
+        0.0, (person_boxes[:, 2] - person_boxes[:, 0]) * (person_boxes[:, 3] - person_boxes[:, 1]))
     all_area = np.maximum(0.0, (all_boxes[:, 2] - all_boxes[:, 0]) * (all_boxes[:, 3] - all_boxes[:, 1]))
     union = person_area[:, None] + all_area[None, :] - inter_area
     iou = np.divide(inter_area, union, out=np.zeros_like(inter_area), where=union > 0)
@@ -745,7 +755,8 @@ def empty_role_result(person_id: int) -> Dict[str, object]:
     }
 
 
-def classify_person_role(person_track: Optional[pd.DataFrame], rider_rows: pd.DataFrame, person_id: int) -> Dict[str, object]:
+def classify_person_role(person_track: Optional[pd.DataFrame], rider_rows: pd.DataFrame,
+                         person_id: int) -> Dict[str, object]:
     """Classify one person track from pre-deduplicated rows (see build_person_role_lookup)."""
     result = empty_role_result(person_id)
     if person_track is None or len(person_track) < ROLE_MIN_SHARED_FRAMES:
@@ -794,7 +805,6 @@ def classify_person_role(person_track: Optional[pd.DataFrame], rider_rows: pd.Da
         vehicle_width = joined["width_v"].to_numpy(dtype=float)
 
         width_ratio_array = vehicle_width / np.maximum(person_width, ROLE_EPS)
-        width_ratio = float(np.median(width_ratio_array))
         width_ratio_pass = float((width_ratio_array >= ROLE_MIN_VEHICLE_WIDTH_RATIO).mean())
         if width_ratio_pass < ROLE_MIN_VEHICLE_WIDTH_RATIO_FRAMES:
             continue
@@ -833,7 +843,8 @@ def classify_person_role(person_track: Optional[pd.DataFrame], rider_rows: pd.Da
             denominator_mask = proximity_steps[:length] & moving[:length]
             denominator = int(denominator_mask.sum())
             if denominator >= ROLE_MIN_MOTION_STEPS:
-                similarity_ratio = float(((cosine[:length] > ROLE_MOTION_SIMILARITY_THRESHOLD) & denominator_mask).sum() / denominator)
+                similarity_ratio = float(
+                    ((cosine[:length] > ROLE_MOTION_SIMILARITY_THRESHOLD) & denominator_mask).sum() / denominator)
 
         if shared_frames < ROLE_SHORT_SHARED_FRAMES:
             if shared_frames > 1:
@@ -841,12 +852,14 @@ def classify_person_role(person_track: Optional[pd.DataFrame], rider_rows: pd.Da
                 displacement_relative = displacement / float(np.maximum(np.mean(person_height), ROLE_EPS))
             else:
                 displacement_relative = 0.0
-            if not (similarity_ratio >= ROLE_SHORT_SIMILARITY_RATIO_REQUIRED or displacement_relative >= ROLE_SHORT_DISPLACEMENT_REQUIRED):
+            if not (similarity_ratio >= ROLE_SHORT_SIMILARITY_RATIO_REQUIRED
+                    or displacement_relative >= ROLE_SHORT_DISPLACEMENT_REQUIRED):
                 continue
 
         association_ok = (
             colocation_ratio >= ROLE_COLOCATION_RATIO_REQUIRED
-            or (similarity_ratio >= ROLE_MOTION_SIMILARITY_RATIO_REQUIRED and colocation_ratio >= ROLE_MOTION_COLOCATION_MIN)
+            or (similarity_ratio >= ROLE_MOTION_SIMILARITY_RATIO_REQUIRED
+                and colocation_ratio >= ROLE_MOTION_COLOCATION_MIN)
         )
         if not association_ok:
             continue
@@ -1003,7 +1016,8 @@ def score_candidate_window(window: pd.DataFrame, fps: float, start_frame: int, e
     ped_density = pedestrian_rows.groupby("frame-count")["unique-id"].nunique().reindex(frames, fill_value=0)
     person_density = person_rows_all.groupby("frame-count")["unique-id"].nunique().reindex(frames, fill_value=0)
     cyclist_density = cyclist_rows.groupby("frame-count")["unique-id"].nunique().reindex(frames, fill_value=0)
-    motorcyclist_density = motorcyclist_rows.groupby("frame-count")["unique-id"].nunique().reindex(frames, fill_value=0)
+    motorcyclist_density = motorcyclist_rows.groupby("frame-count")["unique-id"].nunique().reindex(
+        frames, fill_value=0)
     veh_density = vehicle_rows.groupby("frame-count")["unique-id"].nunique().reindex(frames, fill_value=0)
 
     occlusion_frames = frames[::max(1, OCCLUSION_FRAME_STEP)]
@@ -1066,7 +1080,8 @@ def score_candidate_window(window: pd.DataFrame, fps: float, start_frame: int, e
     }
 
 
-def score_tracking_csv(csv_path: str, mapping_lookup: Dict[Tuple[str, int], Dict[str, object]]) -> List[Dict[str, object]]:
+def score_tracking_csv(csv_path: str,
+                       mapping_lookup: Dict[Tuple[str, int], Dict[str, object]]) -> List[Dict[str, object]]:
     parsed = parse_tracking_csv_name(csv_path)
     if parsed is None:
         return []
@@ -1246,7 +1261,8 @@ def prepare_external_for_clip(
 
     if not external.empty and candidates.empty and PREFER_OFFLINE_MODEL_WHEN:
         logger.info(
-            "External signal CSV has no rows for video=%s segment=%s; falling back to proxy WHEN triggers for this clip",
+            "External signal CSV has no rows for video=%s segment=%s; "
+            "falling back to proxy WHEN triggers for this clip",
             video_id,
             segment_start,
         )
@@ -1511,7 +1527,8 @@ def compute_policy_for_clip(
 
         if main_visible:
             main_row = main_now.iloc[0]
-            movement = compute_main_track_features(main_frames, main_x, main_y, main_area, frame, movement_window_frames)
+            movement = compute_main_track_features(
+                main_frames, main_x, main_y, main_area, frame, movement_window_frames)
             proximity_score = distance_score(main_row, vehicle_rows)
         else:
             movement = {"lateral_motion_score": 0.0, "approach_score": 0.0, "ego_corridor_score": 0.0}
@@ -1772,11 +1789,18 @@ def save_policy_timeline(policy: pd.DataFrame, output_html: str, title: str) -> 
                 y=policy[col],
                 mode="lines",
                 name=name,
-                customdata=policy[["pedestrian_count", "cyclist_candidate_count", "motorcyclist_candidate_count", "vehicle_count", "main_road_user_role", "when_source", "offline_meta_action", "what_to_show", "cue_text"]],
+                customdata=policy[[
+                    "pedestrian_count", "cyclist_candidate_count", "motorcyclist_candidate_count",
+                    "vehicle_count", "main_road_user_role", "when_source", "offline_meta_action",
+                    "what_to_show", "cue_text"]],
                 hovertemplate=(
                     "time=%{x:.2f}s<br>"
                     + name
-                    + "=%{y:.2f}<br>ped=%{customdata[0]}<br>cyclist=%{customdata[1]}<br>motorcyclist=%{customdata[2]}<br>veh=%{customdata[3]}<br>main_role=%{customdata[4]}<br>when_source=%{customdata[5]}<br>meta_action=%{customdata[6]}<br>what=%{customdata[7]}<br>%{customdata[8]}<extra></extra>"
+                    + "=%{y:.2f}<br>ped=%{customdata[0]}<br>cyclist=%{customdata[1]}"
+                    + "<br>motorcyclist=%{customdata[2]}<br>veh=%{customdata[3]}"
+                    + "<br>main_role=%{customdata[4]}<br>when_source=%{customdata[5]}"
+                    + "<br>meta_action=%{customdata[6]}<br>what=%{customdata[7]}"
+                    + "<br>%{customdata[8]}<extra></extra>"
                 ),
             )
         )
@@ -1806,11 +1830,9 @@ def save_policy_timeline(policy: pd.DataFrame, output_html: str, title: str) -> 
     fig.write_html(output_html, include_plotlyjs="cdn", full_html=True)
 
 
-
 # =============================================================================
 # EXACT "WHEN" INTERVAL EXTRACTION
 # =============================================================================
-
 def find_time_column(policy_df: pd.DataFrame) -> str:
     candidates = [
         "time_local_s",
@@ -1825,7 +1847,8 @@ def find_time_column(policy_df: pd.DataFrame) -> str:
             return column
 
     if "frame_local" in policy_df.columns and "fps" in policy_df.columns:
-        policy_df["time_local_s"] = pd.to_numeric(policy_df["frame_local"], errors="coerce") / pd.to_numeric(policy_df["fps"], errors="coerce").replace(0, np.nan)
+        policy_df["time_local_s"] = (pd.to_numeric(policy_df["frame_local"], errors="coerce")
+                                     / pd.to_numeric(policy_df["fps"], errors="coerce").replace(0, np.nan))
         return "time_local_s"
 
     raise ValueError("No usable time column found in frame-level policy data.")
@@ -1835,7 +1858,8 @@ def ensure_explanation_active_column(policy_df: pd.DataFrame) -> pd.DataFrame:
     policy_df = policy_df.copy()
 
     if "explanation_active" in policy_df.columns:
-        policy_df["explanation_active"] = pd.to_numeric(policy_df["explanation_active"], errors="coerce").fillna(0).astype(int)
+        policy_df["explanation_active"] = pd.to_numeric(
+            policy_df["explanation_active"], errors="coerce").fillna(0).astype(int)
         return policy_df
 
     existing_triggers = [column for column in FALLBACK_TRIGGER_COLUMNS if column in policy_df.columns]
@@ -1893,7 +1917,8 @@ def dominant_reason(policy_slice: pd.DataFrame) -> str:
 
     score_candidates = {
         "risk": get_mean_score(policy_slice, "risk_score"),
-        "crossing_interaction": 0.50 * get_mean_score(policy_slice, "crossing_probability") + 0.50 * get_mean_score(policy_slice, "interaction_score"),
+        "crossing_interaction": (0.50 * get_mean_score(policy_slice, "crossing_probability")
+                                 + 0.50 * get_mean_score(policy_slice, "interaction_score")),
         "anomaly": get_mean_score(policy_slice, "anomaly_score"),
     }
     return max(score_candidates, key=score_candidates.get)
@@ -1919,7 +1944,8 @@ def raw_active_intervals(policy_df: pd.DataFrame) -> List[Tuple[int, int]]:
     return intervals
 
 
-def merge_active_intervals(policy_df: pd.DataFrame, intervals: List[Tuple[int, int]], time_column: str) -> List[Tuple[int, int]]:
+def merge_active_intervals(policy_df: pd.DataFrame, intervals: List[Tuple[int, int]],
+                           time_column: str) -> List[Tuple[int, int]]:
     if not intervals:
         return []
 
@@ -2036,10 +2062,10 @@ def write_readable_when_summary(intervals: pd.DataFrame, output_txt: str) -> Non
     with open(output_txt, "w", encoding="utf-8") as file_handle:
         file_handle.write("\n".join(lines))
 
+
 # =============================================================================
 # VIDEO OUTPUT
 # =============================================================================
-
 def get_video_resolution_label(local_path: str) -> str:
     cap = cv2.VideoCapture(local_path)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -2228,7 +2254,8 @@ def find_source_video(video_id: str) -> Optional[str]:
     return download_source_video_from_ftp(video_id)
 
 
-def row_to_pixel_box(row: pd.Series, frame_width: int, frame_height: int, normalised: bool) -> Tuple[int, int, int, int]:
+def row_to_pixel_box(row: pd.Series, frame_width: int, frame_height: int,
+                     normalised: bool) -> Tuple[int, int, int, int]:
     if normalised:
         x1 = int(round(float(row["x1"]) * frame_width))
         y1 = int(round(float(row["y1"]) * frame_height))
@@ -2288,7 +2315,8 @@ def draw_tracks(
         if class_id in PERSON_CLASS_IDS:
             role = "pedestrian_candidate"
             if role_lookup is not None:
-                role = str(role_lookup.get(track_id, empty_role_result(track_id)).get("road_user_role", "pedestrian_candidate"))
+                role = str(role_lookup.get(track_id, empty_role_result(track_id)).get(
+                    "road_user_role", "pedestrian_candidate"))
             if track_id == main_track_id:
                 colour = (0, 255, 255)
                 label = f"MAIN {role} {track_id}"
@@ -2338,7 +2366,8 @@ def draw_cue(frame: np.ndarray, policy_row: pd.Series) -> None:
     cv2.rectangle(overlay, (x1, y1), (x2, y2), colour, -1)
     cv2.addWeighted(overlay, float(policy_row["how_opacity"]), frame, 1.0 - float(policy_row["how_opacity"]), 0, frame)
 
-    cv2.putText(frame, "AV EXPLANATION POLICY", (x1 + 15, y1 + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, "AV EXPLANATION POLICY", (x1 + 15, y1 + 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(frame, cue_text, (x1 + 15, y1 + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(frame, style, (x2 - 230, y1 + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
 
@@ -2432,8 +2461,13 @@ def create_annotated_video(
                 f"clip {float(policy_row['time_local_s']):05.2f}s | frame {local_frame}",
                 f"main role: {policy_row['main_road_user_role']}",
                 f"what: {policy_row['what_to_show']}",
-                f"risk={float(policy_row['risk_score']):.2f} cross={float(policy_row['crossing_probability']):.2f} int={float(policy_row['interaction_score']):.2f}",
-                f"ped={int(policy_row['pedestrian_count'])} cyc={int(policy_row['cyclist_candidate_count'])} moto={int(policy_row['motorcyclist_candidate_count'])} active={int(policy_row['explanation_active'])}",
+                f"risk={float(policy_row['risk_score']):.2f} "
+                f"cross={float(policy_row['crossing_probability']):.2f} "
+                f"int={float(policy_row['interaction_score']):.2f}",
+                f"ped={int(policy_row['pedestrian_count'])} "
+                f"cyc={int(policy_row['cyclist_candidate_count'])} "
+                f"moto={int(policy_row['motorcyclist_candidate_count'])} "
+                f"active={int(policy_row['explanation_active'])}",
             ]
             draw_panel(frame, panel_lines)
 
@@ -2533,7 +2567,8 @@ def main() -> None:
         tracking_csvs = find_tracking_csvs(mapping_lookup)
         if not tracking_csvs:
             raise FileNotFoundError(
-                "No YOLOv11 + BoT SORT tracking CSV files matched mapping.csv. Check config['data'], CSV filenames, and mapping.csv."
+                "No YOLOv11 + BoT SORT tracking CSV files matched mapping.csv. "
+                "Check config['data'], CSV filenames, and mapping.csv."
             )
 
         logger.info("Scoring %d selected YOLOv11 + BoT SORT tracking CSV files", len(tracking_csvs))
@@ -2549,7 +2584,8 @@ def main() -> None:
             logger.warning("Skipped %d tracking CSV files due to read/parse errors", skipped_csvs)
 
         if not all_scores:
-            raise ValueError("No candidate windows were scored. Check YOLOv11 + BoT SORT tracking CSV content and confidence threshold.")
+            raise ValueError("No candidate windows were scored. Check YOLOv11 + BoT SORT "
+                             "tracking CSV content and confidence threshold.")
 
         candidates = pd.DataFrame(all_scores)
         candidates = candidates[candidates["stress_test_score"] > 0].copy()
@@ -2611,7 +2647,8 @@ def main() -> None:
         if CREATE_ANNOTATED_VIDEO:
             video_path = os.path.join(clip_dir, "annotated_policy_demo.mp4")
             try:
-                created = create_annotated_video(candidate, policy, video_path, tracking=tracking, role_lookup=role_lookup)
+                created = create_annotated_video(candidate, policy, video_path,
+                                                 tracking=tracking, role_lookup=role_lookup)
             except Exception as exc:
                 created = False
                 logger.warning("Annotated video failed for rank %03d (%s): %s", rank, candidate["video_id"], exc)
