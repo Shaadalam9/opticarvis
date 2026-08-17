@@ -142,6 +142,12 @@ GATE_BATCH = os.environ.get("OPTICARVIS_GATE_BATCH", "1") == "1"
 # transcoded; only the manual render_timeline_clip.py did.
 BATCH_H264 = os.environ.get("OPTICARVIS_BATCH_H264", "1") == "1"
 
+# Estimate each clip's vanishing point/horizon before the planner sees it
+# (src/auto_calibrate.py). The defaults belong to the original dev rig; on the
+# 100 different dashcams of mapping.csv they bias the planner's ego history,
+# the VO track and the ribbon projection -- one wrong constant, three symptoms.
+AUTO_CALIBRATE = os.environ.get("OPTICARVIS_AUTO_CALIBRATE", "1") == "1"
+
 VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi"]
 DOWNLOAD_MISSING_SOURCE_VIDEOS = True
 
@@ -763,6 +769,10 @@ def run_alpamayo2_super_batch(ready_jobs, start_index=0):
     print("output_dir:", output_dir)
     print("interpreter:", alpamayo2_python)
 
+    adapter_env = os.environ.copy()
+    adapter_env["OPTICARVIS_CALIBRATION_DIR"] = normalise_path(
+        os.path.join(WORKFLOW_OUTPUTS, "calibration"))
+
     command = [
         alpamayo2_python,
         adapter_script,
@@ -778,7 +788,7 @@ def run_alpamayo2_super_batch(ready_jobs, start_index=0):
 
     # check is deliberately off: the adapter exits non zero only when every clip
     # failed, and a partial batch should still render what it produced.
-    completed = subprocess.run(command, cwd=PROJECT_ROOT)
+    completed = subprocess.run(command, cwd=PROJECT_ROOT, env=adapter_env)
 
     if completed.returncode != 0:
         print("")
@@ -1030,8 +1040,27 @@ def prepare_one_job(job, index, total):
         print("Skipped:", message)
         return "failed"
 
+    # Per-clip camera calibration, before anything consumes the constants: the
+    # planner's ego history, the VO track and the ribbon projection all read
+    # the file this writes. Failure keeps the defaults (auto_calibrate refuses
+    # to write an estimate it does not trust), so it must not fail the job.
+    if AUTO_CALIBRATE and not os.path.isfile(calibration_json_for(job)):
+        env = job_environment(job)
+        subprocess.run(
+            [sys.executable, os.path.join(SRC_DIR, "auto_calibrate.py"), job["clip_video"]],
+            cwd=SRC_DIR,
+            env=env,
+        )
+
     print("Clip ready:", message)
     return "ready"
+
+
+def calibration_json_for(job):
+    return normalise_path(
+        os.path.join(WORKFLOW_OUTPUTS, "calibration",
+                     clip_tag(job) + "_camera_calibration.json")
+    )
 
 
 def run_pipeline_one_job(job, index, total, gate_decision=None):

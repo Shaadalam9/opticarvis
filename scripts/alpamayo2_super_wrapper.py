@@ -109,11 +109,60 @@ GROUND_BAND = (520, 690)
 GROUND_MIN_ROWS = 60.0
 MAX_STEP_M = 2.0
 
+# Defaults preserved for the per-clip calibration reset in
+# apply_calibration_for().
+_DEFAULT_CALIBRATION = (FOCAL_PX, CAM_HEIGHT_M, HORIZON_V, VANISH_U)
+
 # A moving vehicle covers well over this in 1.5 s (0.25 m is ~0.6 km/h). Below
 # it, the estimate is indistinguishable from a stopped car -- and a stopped-car
 # history is precisely what corrupts the trajectory head. Treat it as a failed
 # estimate rather than a measurement, and make the caller decide.
 MIN_HISTORY_DISTANCE_M = 0.25
+
+
+def apply_calibration_for(video_tag):
+    """Adopt the per-clip camera calibration written by src/auto_calibrate.py.
+
+    The ego history handed to the planner comes from planar VO built on these
+    constants; with the defaults on a mismatched rig the history acquires a
+    steady yaw bias, and the model -- told the car has been curving -- predicts
+    a harder turn than the scene warrants. Garbage in, confident garbage out.
+
+    Reads <OPTICARVIS_CALIBRATION_DIR>/<video_tag>_camera_calibration.json when
+    the env var is set; silently keeps the defaults otherwise, matching every
+    other consumer's fallback. Values are at the 1280x720 reference this
+    wrapper already resizes every frame to.
+    """
+    global FOCAL_PX, CAM_HEIGHT_M, HORIZON_V, VANISH_U
+
+    # Reset first: this runs once per clip in a batch, and a clip without a
+    # calibration file must not inherit the previous clip's values.
+    FOCAL_PX, CAM_HEIGHT_M, HORIZON_V, VANISH_U = _DEFAULT_CALIBRATION
+
+    calibration_dir = os.environ.get("OPTICARVIS_CALIBRATION_DIR", "")
+
+    if not calibration_dir:
+        return
+
+    path = os.path.join(calibration_dir, video_tag + "_camera_calibration.json")
+
+    if not os.path.isfile(path):
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (ValueError, OSError) as error:
+        print("    WARNING: unreadable calibration %s (%s); using defaults"
+              % (path, type(error).__name__))
+        return
+
+    FOCAL_PX = float(data.get("CAM_FOCAL_PX", FOCAL_PX))
+    CAM_HEIGHT_M = float(data.get("CAM_HEIGHT_M", CAM_HEIGHT_M))
+    HORIZON_V = float(data.get("HORIZON_V", HORIZON_V))
+    VANISH_U = float(data.get("VANISH_U", VANISH_U))
+    print("    calibration: VANISH_U %.1f, HORIZON_V %.1f (%s)"
+          % (VANISH_U, HORIZON_V, os.path.basename(path)))
 
 
 def parse_args(argv=None):
@@ -769,6 +818,7 @@ def build_run_meta(args, clip, t0_s, ego_frames, elapsed_s):
 
 
 def process_clip(clip, args, model):
+    apply_calibration_for(clip["video_id"])
     t0_s = resolve_t0(clip, args)
 
     if args.self_test:

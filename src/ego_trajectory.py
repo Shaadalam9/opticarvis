@@ -360,6 +360,35 @@ def validate_heading_against_pan(psi, pans, fps):
     return valid, reasons
 
 
+def apply_calibration_overrides():
+    """Adopt the per-clip camera calibration (auto_calibrate.py), if present.
+
+    The yaw estimate subtracts translational parallax predicted around
+    VANISH_U; with the default constants on a rig they do not match, the
+    residual acquires a steady drift (+225 deg over 30 s measured) that the
+    heading validation then rejects. The calibration file is shared with the
+    renderer and the Alpamayo2 wrapper, so all three consumers agree.
+    """
+    global VANISH_U, HORIZON_V, FOCAL_PX, CAM_HEIGHT_M
+
+    path = workflow_path("calibration", segment_tag() + "_camera_calibration.json")
+
+    if not os.path.isfile(path):
+        return
+
+    import json
+
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    VANISH_U = float(data.get("VANISH_U", VANISH_U))
+    HORIZON_V = float(data.get("HORIZON_V", HORIZON_V))
+    FOCAL_PX = float(data.get("CAM_FOCAL_PX", FOCAL_PX))
+    CAM_HEIGHT_M = float(data.get("CAM_HEIGHT_M", CAM_HEIGHT_M))
+    print("Loaded camera calibration: %s (VANISH_U %.1f, HORIZON_V %.1f)"
+          % (path, VANISH_U, HORIZON_V))
+
+
 def default_output_json():
     return workflow_path("ego_trajectory", segment_tag() + "_ego_trajectory.json")
 
@@ -385,6 +414,8 @@ def parse_args(argv):
 
 def main():
     args = parse_args(sys.argv)
+
+    apply_calibration_overrides()
 
     fps, x, y, psi, valid_flags = reconstruct_path(args["clip"])
 
