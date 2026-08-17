@@ -220,6 +220,12 @@ PATH_SAMPLE_STEP_M = 0.5
 # direction is the vanishing point unless VO reports a real turn - see the module
 # docstring for the full contract.
 USE_ROAD_AIMED_RIBBON = True
+
+# The most recent ribbon geometry, published by resolve_frame_overlay for the
+# geometry dump. The temporal state that shapes it (lane tracker, VO offsets,
+# aim EMA) cannot be reconstructed after the fact, which is the entire reason
+# the dump exists.
+LAST_RIBBON_GEOMETRY = None
 RIBBON_AIM_BAND = (55.0, 110.0)   # DEAD (kept only because RIBBON_AIM_BIAS is 0): rows that
                                  # used to be read for road heading
 RIBBON_AIM_BIAS = 0.0             # DISABLED, and deliberately so: aiming the far end at the
@@ -1478,15 +1484,19 @@ def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geo
     or a YOLOP mask), the ribbon is additionally centred in the detected ego lane;
     when a VO future path is supplied, it shapes the ribbon through real turns.
     """
+    global LAST_RIBBON_GEOMETRY
+
     if USE_ROAD_AIMED_RIBBON and road_binary is not None:
         lane_center = resolve_lane_center(lane_data, height, width, lane_state)
         geometry = aimed_ribbon_geometry(
             road_binary, height, width, aim_state, lookahead_offset, lane_center,
             vo_pts=vo_pts, vo_state=vo_state)
         overlay = build_path_overlay(geometry, height, width, chevron_phase_m)
+        LAST_RIBBON_GEOMETRY = geometry
         return overlay, geometry["near_v"], geometry["far_v"]
     near_v = static_geometry["near_v"] if static_geometry else float(height)
     far_v = static_geometry["far_v"] if static_geometry else 0.0
+    LAST_RIBBON_GEOMETRY = static_geometry
     return static_overlay, near_v, far_v
 
 
@@ -1999,6 +2009,41 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     on_frames = int((ramp > 0.001).sum())
     print("timeline: %d/%d frames show the overlay." % (on_frames, frame_count))
 
+    # Post-hoc restyling: dump the per-frame geometry the models produced, so
+    # src/restyle_render.py can re-composite any style without the models. On
+    # by default -- a batch that skips it forfeits cheap restyles forever.
+    dump = None
+
+    if os.environ.get("OPTICARVIS_DUMP_GEOMETRY", "1") == "1":
+        from overlay_geometry_dump import GeometryDump
+        from pipeline_common import WORKFLOW_OUTPUTS
+
+        dump = GeometryDump(
+            os.path.join(WORKFLOW_OUTPUTS, "overlay_geometry"),
+            segment_tag(),
+            {
+                # Absolute: the render may be launched from src/ with a
+                # relative clip path, and the compositor runs from anywhere.
+                "clip_video": os.path.abspath(INPUT_VIDEO),
+                "fps": fps,
+                "width": width,
+                "height": height,
+                "frame_count": frame_count,
+                # Effective (post-scaling, post-calibration-override) camera
+                # constants: the compositor re-derives ribbon edges and chevron
+                # sizes from these.
+                "camera": {
+                    "horizon_v": float(HORIZON_V),
+                    "vanish_u": float(VANISH_U),
+                    "focal_px": float(CAM_FOCAL_PX),
+                    "cam_height_m": float(CAM_HEIGHT_M),
+                },
+                "resolution_scale": float(_RESOLUTION_SCALE_APPLIED or 1.0),
+                "chevron_speed_mps": float(CHEVRON_SPEED_MPS),
+            },
+        )
+        print("Overlay geometry dump:", dump.geometry_path)
+
     cum_pan = None
     la_frames = 0
     if USE_EGO_LOOKAHEAD and ego_track is not None:
@@ -2080,6 +2125,10 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
             writer.write(orig)
             writer_vehicles.write(orig)
             rendered_frames += 1
+
+            if dump is not None:
+                dump.frame(index, 0.0, "", None, [], [], None)
+
             continue
 
         if road_seg_enabled:
@@ -2137,6 +2186,10 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
         selected_vehicles = select_and_smooth(vehicles, vehicle_state, MAX_VEHICLES_TO_RENDER)
         attach_distances(selected_vehicles, depth_norm, depth_fit)
 
+        if dump is not None:
+            dump.frame(index, ramp_value, label_text, LAST_RIBBON_GEOMETRY,
+                       selected_persons, selected_vehicles, occlusion)
+
         def compose(with_vehicles):
             layer = base.copy()
             draw_highlights(layer, selected_persons, BOX_COLOUR_CLOSE, BOX_COLOUR, show_class=False)
@@ -2156,6 +2209,9 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     writer.release()
     writer_vehicles.release()
 
+    if dump is not None:
+        dump.close()
+
     return {
         "input_video": INPUT_VIDEO,
         "output_video": OUTPUT_VIDEO,
@@ -2169,6 +2225,7 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
         "model": MODEL_NAME,
         "tracker": TRACKER_NAME,
         "path_style": "temporal_gated_animated",
+        "overlay_geometry": dump.geometry_path if dump is not None and dump.enabled else None,
     }
 
 

@@ -374,6 +374,35 @@ python src/final_preview_renderer.py --calibrate frame.jpg calib.png
 This draws the horizon, the vanishing point and metre distance ticks so `HORIZON_V`,
 `VANISH_U`, `CAM_FOCAL_PX` and `CAM_HEIGHT_M` can be set by eye.
 
+### Restyling a render without re-rendering
+
+The cost of a render is the four models per frame, not the drawing — so the
+renderer dumps the geometry those models produced (per-frame ribbon centreline,
+selected detections, animation ramp, occlusion map) to
+`workflow_outputs/overlay_geometry/` while it renders (`OPTICARVIS_DUMP_GEOMETRY`,
+on by default). Any overlay style can then be re-composited from that in seconds
+on CPU:
+
+```bash
+python src/restyle_render.py \
+    --geometry workflow_outputs/overlay_geometry/<tag>_geometry.jsonl.gz \
+    --style styles/default.json
+```
+
+Styles are per-element JSON (`styles/default.json` reproduces the built-in
+look): colour, opacity, blur/feather, stroke widths and visibility for the
+ribbon, chevrons, pedestrians, vehicles, distance labels and the explanation
+panel — plus parameters that shape geometry derived from the centreline, such
+as the ribbon width and chevron spacing/speed. Pixel values are at the 1280x720
+calibration reference and scale with the clip exactly as the renderer's do.
+
+The compositor calls the renderer's own drawing functions with the style values
+substituted, so the default style reproduces the shipped look by construction.
+What it cannot change is anything the models or temporal trackers decided —
+which objects are highlighted, where the ribbon goes, when the overlay is on.
+That is the point: style variants from identical geometry are clean
+experimental conditions.
+
 ## Configuration
 
 Every path and clip selection is environment-overridable, so rendering a second clip
@@ -398,6 +427,7 @@ needs no code edits.
 | `OPTICARVIS_BATCH_H264` | `1` | Re-encode each rendered mp4v master as H.264 in place. `0` keeps the masters |
 | `OPTICARVIS_MAX_CONSECUTIVE_FAILURES` | `5` | Stop the batch after this many consecutive job failures with no success between (systemic-failure guard). `0` disables |
 | `OPTICARVIS_STOP_ON_JOB_FAILURE` | `0` | `1` stops the batch at the first failed job (debugging) |
+| `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry during renders for post-hoc restyling (`src/restyle_render.py`). `0` disables — and forfeits cheap restyles for those clips |
 | `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv` |
 | `OPTICARVIS_CITY_FOOTAGE_S` | `3600` | Secondary per-city budget. It accrues `STRIDE_S` per clip, not `CLIP_LENGTH_S`, so it is a poor way to ask for *n* clips — use `OPTICARVIS_CLIPS_PER_CITY` |
 | `OPTICARVIS_CLIP_LENGTH_S` | `30` | Clip length in seconds |

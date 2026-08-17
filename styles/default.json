@@ -1,0 +1,67 @@
+{
+  "_comment": "Overlay style for src/restyle_render.py. Values reproduce the renderer's built-in look exactly. Colours are BGR (OpenCV order). Pixel values are at the 1280x720 calibration reference; the compositor scales them to the clip resolution the same way the renderer does.",
+  "reference_width": 1280,
+  "background": {
+    "dim_alpha": 0.06
+  },
+  "ribbon": {
+    "visible": true,
+    "body_color_bgr": [245, 200, 90],
+    "body_alpha": 0.28,
+    "body_blur_px": 15,
+    "rails_color_bgr": [245, 200, 90],
+    "rails_alpha": 0.64,
+    "rail_stroke_px": 2,
+    "half_width_m": 0.6,
+    "fade_in_px": 16.0,
+    "fade_out_px": 35.0,
+    "shadow_visible": true,
+    "shadow_alpha": 0.18,
+    "shadow_offset_px": 6,
+    "shadow_blur_px": 25
+  },
+  "chevrons": {
+    "visible": true,
+    "color_bgr": [245, 235, 180],
+    "alpha": 0.82,
+    "period_m": 3.0,
+    "length_m": 0.9,
+    "half_width_m": 0.32,
+    "speed_mps": 5.0
+  },
+  "pedestrians": {
+    "visible": true,
+    "color_bgr": [0, 220, 255],
+    "close_color_bgr": [0, 160, 255],
+    "fill_alpha": 0.14,
+    "feather_px": 7,
+    "contour_thickness_px": 2
+  },
+  "vehicles": {
+    "visible": true,
+    "color_bgr": [120, 230, 60],
+    "close_color_bgr": [60, 200, 40],
+    "fill_alpha": 0.14,
+    "feather_px": 7,
+    "contour_thickness_px": 2
+  },
+  "distance_labels": {
+    "visible": true,
+    "font_scale": 0.5,
+    "text_thickness_px": 1,
+    "outline_thickness_px": 3,
+    "outline_color_bgr": [0, 0, 0],
+    "color_bgr": null
+  },
+  "panel": {
+    "visible": true,
+    "text_color_bgr": [255, 255, 255],
+    "background_color_bgr": [0, 0, 0],
+    "background_alpha": 0.42,
+    "font_scale": 0.72,
+    "text_thickness_px": 2,
+    "margin_px": 24,
+    "padding_x_px": 16,
+    "padding_y_px": 12
+  }
+}
