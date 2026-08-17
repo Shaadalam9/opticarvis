@@ -131,6 +131,21 @@ def main():
     run_step("semantic_segmentation_module.py")
     run_step("depth_estimation_module.py")
     run_step("mirage_effect_planner.py")
+
+    # Reconstruct the ego's future path so the ribbon can bend into real turns
+    # (OPTICARVIS_VO_TRAJECTORY; the renderer picks the track up from
+    # ego_trajectory.py's default output path). Failure is expected on some
+    # scenes -- VO cannot recover motion in dense stop-and-go traffic -- and the
+    # documented fallback is a straight in-lane ribbon, so a failed track must
+    # not fail the job.
+    if os.environ.get("OPTICARVIS_VO_TRAJECTORY", "0") == "1":
+        vo_script = os.path.join(SRC_DIR, "ego_trajectory.py")
+        completed = subprocess.run([sys.executable, vo_script], cwd=SRC_DIR)
+
+        if completed.returncode != 0:
+            print("ego_trajectory failed (code %d); ribbon stays straight in the ego lane."
+                  % completed.returncode)
+
     run_step("final_preview_renderer.py")
 
     state = load_state()

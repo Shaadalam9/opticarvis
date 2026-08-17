@@ -393,6 +393,36 @@ def test_city_render_target_and_credit():
     assert '"rendered" if city_render_counts.get(city_key) else "no_window_fired"' in body
 
 
+def test_launcher_refuses_to_start_with_assets_missing():
+    """The batch launcher must gate on the asset check.
+
+    The failure this prevents is silent: without the UFLDv2 lane model every
+    ribbon renders straight, and a 100 city batch completes looking plausibly
+    wrong. A crash would have been caught; this would not have been.
+    """
+    path = os.path.join(SRC, "..", "scripts", "run_100_cities.sh")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    assert "setup_assets.py --check-only" in source, (
+        "run_100_cities.sh must run the asset check before launching"
+    )
+    assert "exit 1" in source.split("setup_assets.py --check-only", 1)[1][:400], (
+        "a failed asset check must stop the launch, not just warn"
+    )
+
+    setup_path = os.path.join(SRC, "..", "scripts", "setup_assets.py")
+
+    with open(setup_path, "r", encoding="utf-8") as handle:
+        setup_source = handle.read()
+
+    assert "STRAIGHT" in setup_source, (
+        "the UFLDv2 failure message must say what actually goes wrong -- a "
+        "straight ribbon -- not just that a file is missing"
+    )
+
+
 def test_batch_exit_code_survives_a_partial_run():
     """main() may only exit non zero when nothing rendered at all.
 

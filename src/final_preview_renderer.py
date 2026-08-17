@@ -1983,6 +1983,59 @@ def reveal_rows_for(ramp_value, near_v, far_v, height):
     return np.clip((rows - threshold) / ANIM_REVEAL_SOFT_PX, 0.0, 1.0)
 
 
+def parse_vo_track(vo_track):
+    """Validated per-frame future paths from an ego_trajectory.py track file.
+
+    Shared by both render paths; previously only the timeline path could take
+    a VO track at all, so the batch's renders could never follow a real turn.
+    """
+    if vo_track is None:
+        return None
+
+    if not USE_VO_TRAJECTORY:
+        print("WARNING: a VO track was supplied but OPTICARVIS_VO_TRAJECTORY is not set"
+              " -> ignoring it (VO turn shaping is off by default).")
+        return None
+
+    vo_trajs = vo_track.get("future_trajectories")
+
+    if not vo_trajs:
+        print("WARNING: VO track has no 'future_trajectories' -> VO turn shaping inactive.")
+        return None
+
+    convention = vo_track.get("lateral_convention")
+    if convention != "right_positive":
+        print("WARNING: VO track lateral_convention=%r (expected 'right_positive');"
+              " regenerate it with ego_trajectory.py or turns may be mirrored."
+              % (convention,))
+
+    non_empty = sum(1 for p in vo_trajs if p)
+    print("VO turn shaping enabled: %d/%d frames have a future path."
+          % (non_empty, len(vo_trajs)))
+
+    return vo_trajs
+
+
+def load_vo_track_for_job():
+    """The batch's VO track, written by ego_trajectory.py as a pipeline stage.
+
+    Returns None when absent -- the ribbon then stays straight in the ego lane,
+    which is the documented conservative fallback.
+    """
+    # ego_trajectory.py's own default output path for this job.
+    path = workflow_path("ego_trajectory", segment_tag() + "_ego_trajectory.json")
+
+    if not USE_VO_TRAJECTORY or not os.path.isfile(path):
+        return None
+
+    try:
+        return read_json(path)
+    except (ValueError, OSError) as error:
+        print("WARNING: could not read VO track %s (%s); rendering without it."
+              % (path, type(error).__name__))
+        return None
+
+
 def render_video_timeline(timeline, ego_track=None, vo_track=None):
     """Render both outputs with the overlay animated on/off per the gate timeline."""
     apply_calibration_overrides()
@@ -2054,24 +2107,7 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
         print("WARNING: an ego track was supplied but OPTICARVIS_EGO_LOOKAHEAD is not set"
               " -> ignoring it (the look-ahead is disabled by default).")
 
-    vo_trajs = None
-    if USE_VO_TRAJECTORY and vo_track is not None:
-        vo_trajs = vo_track.get("future_trajectories")
-        if not vo_trajs:
-            print("WARNING: VO track has no 'future_trajectories' -> VO turn shaping inactive.")
-            vo_trajs = None
-        else:
-            non_empty = sum(1 for p in vo_trajs if p)
-            convention = vo_track.get("lateral_convention")
-            if convention != "right_positive":
-                print("WARNING: VO track lateral_convention=%r (expected 'right_positive');"
-                      " regenerate it with ego_trajectory.py or turns may be mirrored."
-                      % (convention,))
-            print("VO turn shaping enabled: %d/%d frames have a future path."
-                  % (non_empty, len(vo_trajs)))
-    elif vo_track is not None:
-        print("WARNING: a VO track was supplied but OPTICARVIS_VO_TRAJECTORY is not set"
-              " -> ignoring it (VO turn shaping is off by default).")
+    vo_trajs = parse_vo_track(vo_track)
 
     scene = None
     road_seg_enabled = USE_ROAD_SEGMENTATION
@@ -2229,7 +2265,7 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     }
 
 
-def render_video(effect_plan):
+def render_video(effect_plan, vo_track=None):
     apply_calibration_overrides()
 
     fps, width, height, frame_count = get_video_metadata(INPUT_VIDEO)
@@ -2349,6 +2385,35 @@ def render_video(effect_plan):
     vehicle_ids = set(VEHICLE_CLASS_IDS)
     aim_state = {}
     lane_state = {}
+    vo_state = {}
+    vo_trajs = parse_vo_track(vo_track)
+
+    dump = None
+
+    if os.environ.get("OPTICARVIS_DUMP_GEOMETRY", "1") == "1":
+        from overlay_geometry_dump import GeometryDump
+        from pipeline_common import WORKFLOW_OUTPUTS
+
+        dump = GeometryDump(
+            os.path.join(WORKFLOW_OUTPUTS, "overlay_geometry"),
+            segment_tag(),
+            {
+                "clip_video": os.path.abspath(INPUT_VIDEO),
+                "fps": fps,
+                "width": width,
+                "height": height,
+                "frame_count": frame_count,
+                "camera": {
+                    "horizon_v": float(HORIZON_V),
+                    "vanish_u": float(VANISH_U),
+                    "focal_px": float(CAM_FOCAL_PX),
+                    "cam_height_m": float(CAM_HEIGHT_M),
+                },
+                "resolution_scale": float(_RESOLUTION_SCALE_APPLIED or 1.0),
+                "chevron_speed_mps": float(CHEVRON_SPEED_MPS),
+            },
+        )
+        print("Overlay geometry dump:", dump.geometry_path)
 
     rendered_frames = 0
     rendered_person_total = 0
@@ -2386,9 +2451,16 @@ def render_video(effect_plan):
         else:
             lane_data = None
 
+        vo_pts = (
+            vo_trajs[rendered_frames]
+            if (vo_trajs is not None and rendered_frames < len(vo_trajs))
+            else None
+        )
+
         frame_overlay, _, _ = resolve_frame_overlay(
             road_binary, height, width, overlay, geometry, aim_state,
             lane_data=lane_data, lane_state=lane_state,
+            vo_pts=vo_pts, vo_state=vo_state,
             chevron_phase_m=(rendered_frames / fps) * CHEVRON_SPEED_MPS if fps else 0.0)
         base = dim_background(result.orig_img)
         blend_path(base, frame_overlay, occlusion)
@@ -2415,10 +2487,19 @@ def render_video(effect_plan):
         draw_text_panel(base, label_text)
         writer_vehicles.write(base)
 
+        # This path has no per-frame animation ramp: the overlay is on for the
+        # whole clip (the gate said explain), so the ramp dumps as 1.0.
+        if dump is not None:
+            dump.frame(rendered_frames, 1.0, label_text, LAST_RIBBON_GEOMETRY,
+                       selected_persons, selected_vehicles, occlusion)
+
         rendered_frames += 1
 
     writer.release()
     writer_vehicles.release()
+
+    if dump is not None:
+        dump.close()
 
     return {
         "input_video": INPUT_VIDEO,
@@ -2559,7 +2640,7 @@ def main():
 
     effect_plan = read_json(EFFECT_PLAN_JSON)
 
-    render_summary = render_video(effect_plan)
+    render_summary = render_video(effect_plan, vo_track=load_vo_track_for_job())
     update_workflow_state(render_summary)
 
     print_summary(effect_plan, render_summary)

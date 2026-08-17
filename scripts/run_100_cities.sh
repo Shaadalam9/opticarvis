@@ -27,6 +27,13 @@ export OPTICARVIS_REQUIRE_GEMMA_GATE="${OPTICARVIS_REQUIRE_GEMMA_GATE:-1}"
 export OPTICARVIS_CLIPS_PER_CITY="${OPTICARVIS_CLIPS_PER_CITY:-1}"
 export OPTICARVIS_WINDOWS_PER_CITY="${OPTICARVIS_WINDOWS_PER_CITY:-5}"
 
+# The ribbon should bend into real turns: reconstruct the ego path per clip
+# (ego_trajectory.py stage) and let the renderer blend it in through its
+# guards. Falls back to straight-in-lane on scenes where VO cannot recover
+# motion. Ego-lane centering and gentle curves additionally need the UFLDv2
+# checkout + culane_res34.pth (see README "External repositories").
+export OPTICARVIS_VO_TRAJECTORY="${OPTICARVIS_VO_TRAJECTORY:-1}"
+
 # The in-code defaults for these two are not valid Hugging Face repo ids; the
 # render fails out of the box without them (see README "Models used").
 export OPTICARVIS_ROAD_SEG_MODEL="${OPTICARVIS_ROAD_SEG_MODEL:-nvidia/segformer-b0-finetuned-cityscapes-1024-1024}"
@@ -36,6 +43,19 @@ export OPTICARVIS_DEPTH_MODEL="${OPTICARVIS_DEPTH_MODEL:-depth-anything/Depth-An
 export OPTICARVIS_HF_LOCAL_FILES_ONLY="${OPTICARVIS_HF_LOCAL_FILES_ONLY:-0}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+# Refuse to start with assets missing. The failure mode this prevents is not a
+# crash but a plausible-looking wrong result: without the UFLDv2 lane model the
+# renderer silently falls back to a straight ribbon, and a whole batch can
+# complete that way. OPTICARVIS_SKIP_ASSET_CHECK=1 overrides (at your own risk).
+if [ "${OPTICARVIS_SKIP_ASSET_CHECK:-0}" != "1" ]; then
+    if ! .venv/bin/python scripts/setup_assets.py --check-only; then
+        echo "" >&2
+        echo "Assets missing -- run: .venv/bin/python scripts/setup_assets.py" >&2
+        echo "(add --with-planner for the 67 GB checkpoint)" >&2
+        exit 1
+    fi
+fi
 
 # Rebuild the job list every run: it is cheap (<1 s), and a stale list built
 # under different WINDOWS_PER_CITY/CLIPS_PER_CITY silently changes what the

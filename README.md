@@ -310,6 +310,20 @@ They are ignored because they hold multi-gigabyte video artefacts. `videos/` is
 ignored for the same reason; the batch runner will fetch missing source videos over
 FTP when credentials are configured.
 
+### Fetching every model at once
+
+```bash
+.venv/bin/python scripts/setup_assets.py                 # download what is missing
+.venv/bin/python scripts/setup_assets.py --check-only    # report, change nothing
+.venv/bin/python scripts/setup_assets.py --with-planner  # also the ~67 GB planner checkpoint
+```
+
+This exists because the worst missing-asset failure is not a crash: without the
+UFLDv2 lane model the renderer silently falls back to a straight in-lane ribbon
+and a whole batch completes looking plausibly wrong. `scripts/run_100_cities.sh`
+runs the check before starting and refuses to launch with required assets
+missing. The sections below describe the same assets for manual setup.
+
 ### External repositories
 
 The pipeline shells out to two upstream checkouts and loads a third as a library.
