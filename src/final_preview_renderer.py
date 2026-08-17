@@ -211,8 +211,8 @@ AIM_MIN_MASK_PX = 40              # minimum road-mask pixels for a usable aim
 FIT_DEPTH_MIN_ROAD_PX = 200       # minimum road pixels before fitting depth to metric
 
 RIBBON_HALF_M = 0.60        # half-width in metres (a slim guidance path)
-PATH_START_M = 8.0
-PATH_END_M = 32.0
+PATH_START_M = 4.0
+PATH_END_M = 21.0
 PATH_SAMPLE_STEP_M = 0.5
 
 # Per-frame ribbon (as opposed to the static planned-trajectory projection): the
@@ -1539,7 +1539,8 @@ def blend_path(frame, overlay, occlusion=None, gain=1.0):
 
 def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geometry,
                           aim_state, lookahead_offset=0.0, lane_data=None, lane_state=None,
-                          vo_pts=None, vo_state=None, chevron_phase_m=0.0):
+                          vo_pts=None, vo_state=None, chevron_phase_m=0.0,
+                          direct_geometry=None):
     """Return (overlay, near_v, far_v) for this frame.
 
     With the road-aimed ribbon enabled and a road mask available, the ribbon
@@ -1550,6 +1551,17 @@ def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geo
     when a VO future path is supplied, it shapes the ribbon through real turns.
     """
     global LAST_RIBBON_GEOMETRY
+
+    # Direct mode: the geometry IS the measured future path, projected with no
+    # filtering between the measurement and the pixels. The aimed machinery
+    # below smooths and rate-limits in screen space, which delays the bend --
+    # the curve then draws at the wrong distance and the ribbon leaves the
+    # street. With a validated, calibrated future path there is nothing to
+    # smooth away: the drawn band lies on the driven road by construction.
+    if direct_geometry is not None:
+        overlay = build_path_overlay(direct_geometry, height, width, chevron_phase_m)
+        LAST_RIBBON_GEOMETRY = direct_geometry
+        return overlay, direct_geometry["near_v"], direct_geometry["far_v"]
 
     # Planner mode: the ribbon is the Alpamayo trajectory, projected once for
     # the clip; only the chevron phase animates. The overlay window sits at the
@@ -1676,6 +1688,67 @@ def apply_lateral_feed_forward(shift_px, lane_state, aim_state, vo_state):
 
     if vo_state and vo_state.get("applied") is not None:
         vo_state["applied"] = vo_state["applied"] + shift_px
+
+
+# Draw the measured future path directly (no aimed-machinery filtering)
+# whenever a validated VO track supplies it. The aimed ribbon remains the
+# fallback for clips without one.
+DIRECT_FUTURE_PATH = os.environ.get("OPTICARVIS_DIRECT_FUTURE_PATH", "1") == "1"
+
+
+class FuturePathSmoother(object):
+    """Light EMA on the future path, in WORLD coordinates.
+
+    Per-frame VO paths carry estimation noise; smoothing them in world space
+    damps the jitter without delaying the geometry the way the screen-space
+    EMAs did (a bend delayed is a bend drawn at the wrong distance). The path
+    is resampled onto a fixed forward grid so frames average like with like.
+    """
+
+    GRID_M = np.arange(1.0, 34.0, 0.5)
+    ALPHA = 0.45
+
+    def __init__(self):
+        self.lateral = None
+
+    def update(self, vo_pts):
+        pts = [(float(x), float(y)) for x, y in vo_pts if float(x) > 0.2]
+
+        if len(pts) < 3:
+            self.lateral = None
+            return None
+
+        pts.sort(key=lambda p: p[0])
+        xs = np.array([p[0] for p in pts])
+        ys = np.array([p[1] for p in pts])
+        grid_lat = np.interp(self.GRID_M, xs, ys, left=ys[0], right=ys[-1])
+
+        if self.lateral is None:
+            self.lateral = grid_lat
+        else:
+            self.lateral = self.lateral + self.ALPHA * (grid_lat - self.lateral)
+
+        # only the span the VO actually measured
+        span = self.GRID_M <= xs[-1] + 0.5
+
+        return list(zip(self.GRID_M[span], self.lateral[span]))
+
+
+def direct_future_geometry(smoother, vo_pts):
+    if not DIRECT_FUTURE_PATH or vo_pts is None or smoother is None:
+        return None
+
+    traj = smoother.update(vo_pts)
+
+    if traj is None or len(traj) < 3:
+        return None
+
+    geometry = build_ribbon_geometry(traj)
+
+    if geometry is not None:
+        geometry["traj"] = None    # chevrons, like the aimed band
+
+    return geometry
 
 
 def load_planner_track():
@@ -2383,6 +2456,7 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     overlay = build_path_overlay(geometry, height, width)
     travelled_m = travelled_distance_per_frame(vo_track)
     lateral_tracker = LateralMotionTracker(width)
+    path_smoother = FuturePathSmoother()
     planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
     planner_ego_poses = (
         ego_poses_from_track(vo_track) if RIBBON_SOURCE == "planner" else None
@@ -2563,7 +2637,9 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
         frame_overlay, frame_near_v, frame_far_v = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state, lookahead_offset,
             lane_data=lane_data, lane_state=lane_state, vo_pts=vo_pts, vo_state=vo_state,
-            chevron_phase_m=phase_m)
+            chevron_phase_m=phase_m,
+            direct_geometry=(direct_future_geometry(path_smoother, vo_pts)
+                             if RIBBON_SOURCE == "perception" else None))
         base = (orig.astype(np.float32) * (1.0 - BACKGROUND_DIM_ALPHA * ramp_value)).astype(np.uint8)
         reveal = reveal_rows_for(ramp_value, frame_near_v, frame_far_v, height)
         blend_path(base, frame_overlay, occlusion, gain=reveal)
@@ -2683,6 +2759,7 @@ def render_video(effect_plan, vo_track=None):
     overlay = build_path_overlay(geometry, height, width)
     travelled_m = travelled_distance_per_frame(vo_track)
     lateral_tracker = LateralMotionTracker(width)
+    path_smoother = FuturePathSmoother()
     planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
     planner_ego_poses = (
         ego_poses_from_track(vo_track) if RIBBON_SOURCE == "planner" else None
@@ -2843,7 +2920,9 @@ def render_video(effect_plan, vo_track=None):
             road_binary, height, width, overlay, frame_geometry, aim_state,
             lane_data=lane_data, lane_state=lane_state,
             vo_pts=vo_pts, vo_state=vo_state,
-            chevron_phase_m=phase_m)
+            chevron_phase_m=phase_m,
+            direct_geometry=(direct_future_geometry(path_smoother, vo_pts)
+                             if RIBBON_SOURCE == "perception" else None))
         base = dim_background(result.orig_img)
         blend_path(base, frame_overlay, occlusion)
 
