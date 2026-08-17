@@ -279,6 +279,87 @@ def future_trajectories(
     return output
 
 
+# Heading validation against scene phase correlation (ENGINEERING.md 3a: the
+# scene sliding right means the camera yaws left). The VO yaw estimate depends
+# on the flat-ground calibration matching the camera; on a rig it does not
+# match, the parallax subtraction leaves a one-sided residual and the heading
+# acquires a steady drift -- real turns still read correctly, but the future
+# path curls sideways on straights, and the ribbon bends where the car is not
+# going. Measured on Fvt6rD9tt1c_22: +225 deg accumulated over 30 s of mostly
+# straight road, +70 deg in one window the scene pans the other way.
+VALIDATION_WINDOW_S = 4.0
+VALIDATION_PAN_STRONG_PX = 60.0   # at the 320x180 correlation scale
+VALIDATION_PAN_QUIET_PX = 30.0
+VALIDATION_DRIFT_DEG = 10.0       # heading accumulated in a pan-quiet window
+VALIDATION_TURN_DEG = 5.0
+
+
+def scene_pan_profile(clip_path):
+    """Per-frame horizontal scene shift via phase correlation, upper half only
+    (skyline and buildings: mostly rotational, little ground parallax)."""
+    capture = cv2.VideoCapture(clip_path)
+    previous = None
+    pans = []
+
+    try:
+        while True:
+            ok, frame = capture.read()
+
+            if not ok:
+                break
+
+            gray = cv2.resize(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (320, 180)
+            ).astype(np.float32)[:90, :]
+
+            if previous is not None:
+                (dx, _dy), _response = cv2.phaseCorrelate(previous, gray)
+                pans.append(float(dx))
+
+            previous = gray
+    finally:
+        capture.release()
+
+    return np.asarray(pans, dtype=np.float64)
+
+
+def validate_heading_against_pan(psi, pans, fps):
+    """Cross-check the integrated VO heading against the scene pan, per window.
+
+    Returns (valid, reasons). Conservative on purpose: a rejected track means a
+    straight in-lane ribbon, and a ribbon that bends where the car is not going
+    is worse than one that does not bend.
+    """
+    window = max(1, int(round(VALIDATION_WINDOW_S * fps)))
+    psi_deg = np.degrees(np.asarray(psi, dtype=np.float64))
+    reasons = []
+    drift_windows = 0
+
+    for start in range(0, len(pans) - window + 1, window):
+        pan_sum = float(pans[start:start + window].sum())
+        end = min(start + window, len(psi_deg) - 1)
+        heading_delta = float(psi_deg[end] - psi_deg[start])
+
+        # Sign convention: scene right (+pan) = yaw left = +psi (vehicle frame).
+        if abs(pan_sum) >= VALIDATION_PAN_STRONG_PX and abs(heading_delta) >= VALIDATION_TURN_DEG:
+            if np.sign(pan_sum) != np.sign(heading_delta):
+                reasons.append(
+                    "t=%.1f-%.1fs: scene pans %+.0f px but VO heading moves %+.1f deg"
+                    % (start / fps, (start + window) / fps, pan_sum, heading_delta)
+                )
+        elif abs(pan_sum) <= VALIDATION_PAN_QUIET_PX and abs(heading_delta) >= VALIDATION_DRIFT_DEG:
+            drift_windows += 1
+            reasons.append(
+                "t=%.1f-%.1fs: scene is quiet (%+.0f px) but VO heading drifts %+.1f deg"
+                % (start / fps, (start + window) / fps, pan_sum, heading_delta)
+            )
+
+    contradictions = len(reasons) - drift_windows
+    valid = contradictions == 0 and drift_windows <= 1
+
+    return valid, reasons
+
+
 def default_output_json():
     return workflow_path("ego_trajectory", segment_tag() + "_ego_trajectory.json")
 
@@ -319,6 +400,20 @@ def main():
         lookahead_m=args["lookahead_m"],
     )
 
+    pans = scene_pan_profile(args["clip"])
+    heading_valid, reasons = validate_heading_against_pan(psi, pans, fps)
+
+    if not heading_valid:
+        print("")
+        print("VO heading REJECTED by the scene-pan cross-check "
+              "(ENGINEERING.md 3a); the ribbon will stay straight in the ego "
+              "lane rather than bend where the car is not going:")
+
+        for reason in reasons:
+            print("  " + reason)
+
+        trajectories = [[] for _ in trajectories]
+
     payload = {
         "clip_video": args["clip"],
         "fps": fps,
@@ -331,6 +426,11 @@ def main():
         "vanish_u": VANISH_U,
         "lateral_convention": "right_positive",
         "valid_motion_frames": int(sum(valid_flags)),
+        "heading_validation": {
+            "valid": bool(heading_valid),
+            "method": "scene_pan_cross_check",
+            "reasons": reasons,
+        },
         "future_trajectories": trajectories,
     }
 

@@ -221,6 +221,24 @@ PATH_SAMPLE_STEP_M = 0.5
 # docstring for the full contract.
 USE_ROAD_AIMED_RIBBON = True
 
+# What shapes the ribbon:
+#   perception (default) -- the road-aimed ribbon: lane centering plus
+#     validated-VO turn shaping. Shows where the lane goes.
+#   planner -- the Alpamayo trajectory from the context JSON, projected through
+#     the camera. Shows where the PLANNER intends to go, which is the thing an
+#     explainable-AV overlay is explaining; valid near t0 (the 64 waypoints
+#     cover 6.4 s from the planned moment), which is exactly when the gate
+#     shows the overlay. Falls back to perception when no context exists.
+RIBBON_SOURCE = os.environ.get("OPTICARVIS_RIBBON_SOURCE", "perception")
+
+# Alpamayo's ego frame is FLU: +y is LEFT. The renderer is right-positive
+# (LATERAL_SIGN, section 3a of ENGINEERING.md). Verified on Fvt6rD9tt1c_22:
+# the planner's own reasoning says "Adapt speed for the left curve ahead", its
+# trajectory runs to y=+31 m, and the scene pan at t0 confirms the left curve
+# -- so +y must be left, and the raw value must be negated here. Consuming it
+# unsigned would mirror every planned turn.
+PLANNER_LATERAL_SIGN = float(os.environ.get("OPTICARVIS_PLANNER_LATERAL_SIGN", "-1"))
+
 # The most recent ribbon geometry, published by resolve_frame_overlay for the
 # geometry dump. The temporal state that shapes it (lane tracker, VO offsets,
 # aim EMA) cannot be reconstructed after the fact, which is the entire reason
@@ -670,7 +688,8 @@ def load_trajectory_points():
         x_fwd = float(point[0])
         if x_fwd <= MIN_FORWARD_M:
             continue
-        points.append((x_fwd, float(point[1])))
+        # PLANNER_LATERAL_SIGN: Alpamayo's +y is left, the renderer's is right.
+        points.append((x_fwd, PLANNER_LATERAL_SIGN * float(point[1])))
 
     points.sort(key=lambda item: item[0])
 
@@ -1486,6 +1505,15 @@ def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geo
     """
     global LAST_RIBBON_GEOMETRY
 
+    # Planner mode: the ribbon is the Alpamayo trajectory, projected once for
+    # the clip; only the chevron phase animates. The overlay window sits at the
+    # planned moment, where those 6.4 s of waypoints are valid, so the shape is
+    # not advanced per frame. Occlusion and reveal still apply in blend_path.
+    if RIBBON_SOURCE == "planner" and static_geometry is not None:
+        overlay = build_path_overlay(static_geometry, height, width, chevron_phase_m)
+        LAST_RIBBON_GEOMETRY = static_geometry
+        return overlay, static_geometry["near_v"], static_geometry["far_v"]
+
     if USE_ROAD_AIMED_RIBBON and road_binary is not None:
         lane_center = resolve_lane_center(lane_data, height, width, lane_state)
         geometry = aimed_ribbon_geometry(
@@ -1541,7 +1569,16 @@ def load_path_geometry():
     traj = load_trajectory_points()
     if traj is None:
         traj = straight_trajectory_points()
-    return build_ribbon_geometry(traj)
+    geometry = build_ribbon_geometry(traj)
+
+    # In planner mode the ribbon animates like the perception ribbon: chevrons
+    # flowing along the centreline rather than static world dashes. traj=None
+    # is the switch build_path_overlay keys on, and it also keeps the geometry
+    # dump/compositor contract, which stores the centreline alone.
+    if RIBBON_SOURCE == "planner" and geometry is not None:
+        geometry["traj"] = None
+
+    return geometry
 
 
 def draw_calibration_guides(frame):
@@ -1997,9 +2034,16 @@ def parse_vo_track(vo_track):
               " -> ignoring it (VO turn shaping is off by default).")
         return None
 
+    validation = vo_track.get("heading_validation") or {}
+
+    if validation.get("valid") is False:
+        print("VO track failed its heading validation (%s); ribbon stays "
+              "straight in the ego lane." % validation.get("method", "unknown"))
+        return None
+
     vo_trajs = vo_track.get("future_trajectories")
 
-    if not vo_trajs:
+    if not vo_trajs or not any(vo_trajs):
         print("WARNING: VO track has no 'future_trajectories' -> VO turn shaping inactive.")
         return None
 
