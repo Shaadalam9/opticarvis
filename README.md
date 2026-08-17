@@ -442,6 +442,8 @@ needs no code edits.
 | `OPTICARVIS_MAX_CONSECUTIVE_FAILURES` | `5` | Stop the batch after this many consecutive job failures with no success between (systemic-failure guard). `0` disables |
 | `OPTICARVIS_STOP_ON_JOB_FAILURE` | `0` | `1` stops the batch at the first failed job (debugging) |
 | `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry during renders for post-hoc restyling (`src/restyle_render.py`). `0` disables — and forfeits cheap restyles for those clips |
+| `OPTICARVIS_RIBBON_SOURCE` | `perception` | `planner` draws the ribbon from Alpamayo's 64-waypoint trajectory (the intent the overlay explains, valid near the planned moment); `perception` uses lane centering + validated VO. The batch launcher sets `planner` |
+| `OPTICARVIS_PLANNER_LATERAL_SIGN` | `-1` | Alpamayo's ego frame is FLU (+y left); the renderer is right-positive. `-1` converts; changing it mirrors every planned turn |
 | `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv` |
 | `OPTICARVIS_CITY_FOOTAGE_S` | `3600` | Secondary per-city budget. It accrues `STRIDE_S` per clip, not `CLIP_LENGTH_S`, so it is a poor way to ask for *n* clips — use `OPTICARVIS_CLIPS_PER_CITY` |
 | `OPTICARVIS_CLIP_LENGTH_S` | `30` | Clip length in seconds |

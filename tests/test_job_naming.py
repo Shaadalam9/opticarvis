@@ -423,6 +423,37 @@ def test_launcher_refuses_to_start_with_assets_missing():
     )
 
 
+def test_planner_ribbon_negates_alpamayo_lateral():
+    """Alpamayo's +y is LEFT (FLU); the renderer is right-positive.
+
+    Verified on Fvt6rD9tt1c_22: the planner's own reasoning says "left curve
+    ahead" while its trajectory runs to y=+31 m, and the scene pan confirms the
+    left curve. Consuming y unsigned mirrors every planned turn -- the exact
+    failure ENGINEERING.md 3a documents for the VO path.
+    """
+    path = os.path.join(SRC, "final_preview_renderer.py")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    assert '"OPTICARVIS_PLANNER_LATERAL_SIGN", "-1"' in source, (
+        "the planner lateral sign must default to -1 (FLU -> right-positive)"
+    )
+    assert "PLANNER_LATERAL_SIGN * float(point[1])" in source, (
+        "load_trajectory_points must apply the sign; raw y mirrors planned turns"
+    )
+    assert 'RIBBON_SOURCE == "planner"' in source, (
+        "the planner ribbon branch must exist in resolve_frame_overlay"
+    )
+
+    launcher = os.path.join(SRC, "..", "scripts", "run_100_cities.sh")
+
+    with open(launcher, "r", encoding="utf-8") as handle:
+        assert "OPTICARVIS_RIBBON_SOURCE" in handle.read(), (
+            "the batch launcher must pin the ribbon source explicitly"
+        )
+
+
 def test_batch_exit_code_survives_a_partial_run():
     """main() may only exit non zero when nothing rendered at all.
 
