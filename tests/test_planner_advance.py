@@ -102,6 +102,49 @@ def test_before_t0_clamps_to_plan_start():
         "before the planned moment the full plan should be shown")
 
 
+def test_world_anchoring_pins_the_plan_to_the_street():
+    """With actual ego poses, the planned curve stays at its world spot and
+    approaches exactly as fast as the car actually drives -- even when the
+    driver diverges from the plan.
+    """
+    fps = 30.0
+    points = []
+
+    for i in range(64):
+        x = 8.0 * STEP * i
+        y = 0.0 if x < 10 else -(x - 10) * 0.5
+        points.append((x, y))
+
+    track = {"points": points, "yaws": [0.0] * 64, "t0_s": 2.0, "step_s": STEP}
+    # The actual car drives straight the whole time, diverging from the plan.
+    poses = [[8.0 * (i / fps), 0.0, 0.0] for i in range(300)]
+
+    for clip_time in (2.0, 2.5, 3.0):
+        remaining = R.anchor_planner_trajectory(track, clip_time, poses, fps)
+        kink_x = next(x for x, y in remaining if y < -0.01)
+        driven = 8.0 * (clip_time - 2.0)
+        assert abs(kink_x - (10.0 - driven)) < 1.0, (
+            "kink drifted off its world spot: t=%.1f kink=%.2f driven=%.1f"
+            % (clip_time, kink_x, driven))
+
+    # Once the car has passed the kink, only the curve beyond it remains.
+    remaining = R.anchor_planner_trajectory(track, 3.5, poses, fps)
+    assert remaining[0][1] < -0.01, (
+        "past the kink, every remaining point must already be in the curve")
+
+
+def test_anchoring_requires_a_validated_track():
+    assert R.ego_poses_from_track(None) is None
+    assert R.ego_poses_from_track({
+        "heading_validation": {"valid": False},
+        "ego_pose_right_positive": [[0, 0, 0]] * 10,
+    }) is None, "a rejected heading must not anchor the ribbon"
+    assert R.ego_poses_from_track({
+        "heading_validation": {"valid": True},
+        "ego_pose_right_positive": [[0, 0, 0]] * 10,
+    }) is not None
+
+
 if __name__ == "__main__":
     failures = 0
 

@@ -442,7 +442,7 @@ needs no code edits.
 | `OPTICARVIS_MAX_CONSECUTIVE_FAILURES` | `5` | Stop the batch after this many consecutive job failures with no success between (systemic-failure guard). `0` disables |
 | `OPTICARVIS_STOP_ON_JOB_FAILURE` | `0` | `1` stops the batch at the first failed job (debugging) |
 | `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry during renders for post-hoc restyling (`src/restyle_render.py`). `0` disables — and forfeits cheap restyles for those clips |
-| `OPTICARVIS_RIBBON_SOURCE` | `perception` | `planner` draws the ribbon from Alpamayo's 64-waypoint trajectory (the intent the overlay explains, valid near the planned moment); `perception` uses lane centering + validated VO. The batch launcher sets `planner` |
+| `OPTICARVIS_RIBBON_SOURCE` | `perception` | `perception` shows where the vehicle will actually drive (lane centering + validated, calibrated VO) — the deliverable ribbon. `planner` draws Alpamayo's intended trajectory, world-anchored and advanced by real ego motion; on human-driven footage it visibly diverges from the driven road, so treat it as a labeled experimental condition |
 | `OPTICARVIS_PLANNER_LATERAL_SIGN` | `-1` | Alpamayo's ego frame is FLU (+y left); the renderer is right-positive. `-1` converts; changing it mirrors every planned turn |
 | `OPTICARVIS_AUTO_CALIBRATE` | `1` | Estimate each clip's vanishing point/horizon (`src/auto_calibrate.py`) before the planner, VO and renderer consume the camera constants. An untrusted estimate writes nothing and the defaults hold |
 | `OPTICARVIS_CALIBRATION_DIR` | `<workflow_outputs>/calibration` | Where the planner wrapper looks for per-clip calibration files (set for the adapter subprocess by the batch) |

@@ -1600,13 +1600,70 @@ def load_planner_track():
     return {"points": points, "yaws": yaws, "t0_s": float(t0), "step_s": float(step)}
 
 
+def ego_poses_from_track(vo_track):
+    """Per-frame actual ego poses for world-anchoring the planner ribbon.
+
+    Only from a track whose heading passed the scene-pan validation: anchoring
+    on a biased heading re-detaches the ribbon from the street.
+    """
+    if vo_track is None:
+        return None
+
+    if (vo_track.get("heading_validation") or {}).get("valid") is not True:
+        return None
+
+    poses = vo_track.get("ego_pose_right_positive")
+
+    return poses if poses and len(poses) > 2 else None
+
+
+def anchor_planner_trajectory(track, clip_time_s, ego_poses, fps):
+    """The plan, pinned to the world where it was made, seen from the car's
+    ACTUAL pose now.
+
+    The plan-pose advance assumes the car follows the plan; a human drove this
+    footage, and where the driver diverges the ribbon detaches from the street.
+    World-anchoring uses the validated VO pose instead: the planned curve stays
+    on the road at the spot it was planned for, and approaches exactly as fast
+    as the car actually approaches it.
+    """
+    frame_t0 = int(round(track["t0_s"] * fps))
+    frame_now = int(round(clip_time_s * fps))
+
+    if not (0 <= frame_t0 < len(ego_poses) and 0 <= frame_now < len(ego_poses)):
+        return None
+
+    x0, y0, psi0 = ego_poses[frame_t0]
+    xt, yt, psit = ego_poses[frame_now]
+
+    # Travelled displacement, expressed in the ego frame at the planned moment
+    # (the frame the plan's points live in).
+    dx = xt - x0
+    dy = yt - y0
+    cos0, sin0 = math.cos(psi0), math.sin(psi0)
+    travelled_x = cos0 * dx + sin0 * dy
+    travelled_y = -sin0 * dx + cos0 * dy
+
+    delta_psi = psit - psi0
+    cos_d, sin_d = math.cos(delta_psi), math.sin(delta_psi)
+
+    remaining = []
+
+    for px, py in track["points"]:
+        qx = px - travelled_x
+        qy = py - travelled_y
+        remaining.append((cos_d * qx + sin_d * qy, -sin_d * qx + cos_d * qy))
+
+    remaining = [(x, y) for x, y in remaining if x > MIN_FORWARD_M]
+
+    return remaining if len(remaining) >= 2 else None
+
+
 def advance_planner_trajectory(track, clip_time_s):
     """The remaining plan, re-expressed in the pose the plan has reached.
 
-    Drawn static, the already-driven part of the plan stays painted on the
-    road and the curve sits at the wrong distance -- too early before the
-    planned moment's position, too late after it. Advancing assumes the car
-    follows its own plan, which is exactly the claim the ribbon is making.
+    Fallback for clips without a validated VO track: assumes the car follows
+    its own plan. anchor_planner_trajectory is the honest version.
     """
     elapsed = max(0.0, clip_time_s - track["t0_s"])
     position = elapsed / track["step_s"]
@@ -1640,13 +1697,30 @@ def advance_planner_trajectory(track, clip_time_s):
     return remaining
 
 
-def planner_geometry_for_frame(track, frame_index, fps):
+def planner_geometry_for_frame(track, frame_index, fps, ego_poses=None):
     """Per-frame ribbon geometry from the advanced plan, or None when the
-    plan's horizon is exhausted (the caller falls back to perception)."""
+    plan's horizon is exhausted (the caller falls back to perception).
+
+    With validated actual ego poses the plan is anchored to the world;
+    otherwise it advances along its own predicted poses. Either way the plan
+    ends at its horizon: past t0 + 6.4 s there is nothing honest to draw.
+    """
     if track is None or not fps:
         return None
 
-    remaining = advance_planner_trajectory(track, frame_index / fps)
+    clip_time_s = frame_index / fps
+    horizon_s = track["t0_s"] + (len(track["points"]) - 1) * track["step_s"]
+
+    if clip_time_s > horizon_s:
+        return None
+
+    remaining = None
+
+    if ego_poses is not None:
+        remaining = anchor_planner_trajectory(track, clip_time_s, ego_poses, fps)
+
+    if remaining is None:
+        remaining = advance_planner_trajectory(track, clip_time_s)
 
     if remaining is None:
         return None
@@ -2194,10 +2268,17 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
     planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
+    planner_ego_poses = (
+        ego_poses_from_track(vo_track) if RIBBON_SOURCE == "planner" else None
+    )
 
     if RIBBON_SOURCE == "planner" and planner_track is None:
         print("Planner ribbon requested but the context lacks yaw/t0; "
               "drawing the static planner path.")
+    elif RIBBON_SOURCE == "planner":
+        print("Planner ribbon anchoring: %s"
+              % ("world (validated VO poses)" if planner_ego_poses
+                 else "plan poses (no validated VO)"))
 
     ramp, label_per_frame = build_anim_schedule(timeline, frame_count, fps)
     on_frames = int((ramp > 0.001).sum())
@@ -2351,7 +2432,7 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
         frame_geometry = geometry
 
         if RIBBON_SOURCE == "planner":
-            frame_geometry = planner_geometry_for_frame(planner_track, index, fps)
+            frame_geometry = planner_geometry_for_frame(planner_track, index, fps, planner_ego_poses)
 
         frame_overlay, frame_near_v, frame_far_v = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state, lookahead_offset,
@@ -2475,10 +2556,17 @@ def render_video(effect_plan, vo_track=None):
     geometry = load_path_geometry()
     overlay = build_path_overlay(geometry, height, width)
     planner_track = load_planner_track() if RIBBON_SOURCE == "planner" else None
+    planner_ego_poses = (
+        ego_poses_from_track(vo_track) if RIBBON_SOURCE == "planner" else None
+    )
 
     if RIBBON_SOURCE == "planner" and planner_track is None:
         print("Planner ribbon requested but the context lacks yaw/t0; "
               "drawing the static planner path.")
+    elif RIBBON_SOURCE == "planner":
+        print("Planner ribbon anchoring: %s"
+              % ("world (validated VO poses)" if planner_ego_poses
+                 else "plan poses (no validated VO)"))
 
     if overlay is None:
         print("Could not build road path geometry; rendering without a path ribbon.")
@@ -2612,7 +2700,7 @@ def render_video(effect_plan, vo_track=None):
         frame_geometry = geometry
 
         if RIBBON_SOURCE == "planner":
-            frame_geometry = planner_geometry_for_frame(planner_track, rendered_frames, fps)
+            frame_geometry = planner_geometry_for_frame(planner_track, rendered_frames, fps, planner_ego_poses)
 
         frame_overlay, _, _ = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state,

@@ -457,6 +457,15 @@ def main():
         "vanish_u": VANISH_U,
         "lateral_convention": "right_positive",
         "valid_motion_frames": int(sum(valid_flags)),
+        # Absolute ego pose per frame (right-positive, like everything else in
+        # this file): the renderer anchors the planner's trajectory to the
+        # world where it was planned and advances it by the car's ACTUAL
+        # motion. Only trustworthy when heading_validation.valid -- an
+        # anchoring built on a biased heading re-detaches the ribbon.
+        "ego_pose_right_positive": [
+            [round(float(px), 3), round(-float(py), 3), round(-float(ppsi), 5)]
+            for px, py, ppsi in zip(x, y, psi)
+        ],
         "heading_validation": {
             "valid": bool(heading_valid),
             "method": "scene_pan_cross_check",

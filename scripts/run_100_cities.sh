@@ -27,11 +27,12 @@ export OPTICARVIS_REQUIRE_GEMMA_GATE="${OPTICARVIS_REQUIRE_GEMMA_GATE:-1}"
 export OPTICARVIS_CLIPS_PER_CITY="${OPTICARVIS_CLIPS_PER_CITY:-1}"
 export OPTICARVIS_WINDOWS_PER_CITY="${OPTICARVIS_WINDOWS_PER_CITY:-5}"
 
-# The ribbon shows the PLANNER's intended path -- the thing the overlay is
-# explaining -- projected from Alpamayo's 64 waypoints at the planned moment.
-# Perception (lane centering + validated VO) remains the fallback when a clip
-# has no planner context.
-export OPTICARVIS_RIBBON_SOURCE="${OPTICARVIS_RIBBON_SOURCE:-planner}"
+# The ribbon shows where the vehicle WILL drive: the actual future path from
+# lane centering + validated, calibrated visual odometry. The planner's
+# intended path (OPTICARVIS_RIBBON_SOURCE=planner) is available as a labeled
+# experimental condition -- on human-driven footage it diverges from the
+# driven road, which is a finding, not a deliverable ribbon.
+export OPTICARVIS_RIBBON_SOURCE="${OPTICARVIS_RIBBON_SOURCE:-perception}"
 
 # The ribbon should bend into real turns: reconstruct the ego path per clip
 # (ego_trajectory.py stage) and let the renderer blend it in through its
