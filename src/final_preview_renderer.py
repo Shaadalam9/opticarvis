@@ -1334,7 +1334,8 @@ def draw_centerline_dashes(layer, centre_arr, colour=255):
         i += period
 
 
-def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255):
+def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255,
+                             assume_ordered=False):
     """Chevrons as WORLD ground-plane marks, projected like the band itself.
 
     The previous implementation built each chevron in image space (screen
@@ -1357,9 +1358,17 @@ def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255):
 
     vs = centre_arr[:, 1]
     us = centre_arr[:, 0]
-    order = np.argsort(vs)[::-1]           # near (large v) -> far
-    v_s = vs[order].astype(np.float64)
-    u_s = us[order].astype(np.float64)
+
+    # Anchor/arc centrelines arrive in path order already; sorting them by row
+    # would scramble a turn that folds back (v is not monotone along the path).
+    if assume_ordered:
+        v_s = vs.astype(np.float64)
+        u_s = us.astype(np.float64)
+    else:
+        order = np.argsort(vs)[::-1]       # near (large v) -> far
+        v_s = vs[order].astype(np.float64)
+        u_s = us[order].astype(np.float64)
+
     keep = v_s > HORIZON_V + 4.0
     v_s, u_s = v_s[keep], u_s[keep]
 
@@ -1473,7 +1482,8 @@ def build_path_overlay(geometry, height, width, chevron_phase_m=0.0):
     if geometry.get("traj") is not None:
         draw_world_dashes(dash_cov, geometry["traj"], colour=255)
     else:
-        draw_centerline_chevrons(dash_cov, geometry["centre"], chevron_phase_m, colour=255)
+        draw_centerline_chevrons(dash_cov, geometry["centre"], chevron_phase_m, colour=255,
+                                 assume_ordered=bool(geometry.get("ordered")))
 
     # A mark is road paint only while it stays inside the band; a stroke
     # escaping the rails onto bare asphalt breaks the illusion instantly.
@@ -1540,7 +1550,7 @@ def blend_path(frame, overlay, occlusion=None, gain=1.0):
 def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geometry,
                           aim_state, lookahead_offset=0.0, lane_data=None, lane_state=None,
                           vo_pts=None, vo_state=None, chevron_phase_m=0.0,
-                          direct_geometry=None):
+                          direct_geometry=None, anchor_geometry=None):
     """Return (overlay, near_v, far_v) for this frame.
 
     With the road-aimed ribbon enabled and a road mask available, the ribbon
@@ -1551,6 +1561,16 @@ def resolve_frame_overlay(road_binary, height, width, static_overlay, static_geo
     when a VO future path is supplied, it shapes the ribbon through real turns.
     """
     global LAST_RIBBON_GEOMETRY
+
+    # Future-anchored mode, the highest-precedence source: the geometry was
+    # traced on the actual street pixels the car later drives over (homography
+    # chains to the future frames), so it stays on the road through the exact
+    # situations that break the projected sources below -- pull-away heading
+    # noise, fast yaw, turn arcs that fold back on themselves.
+    if anchor_geometry is not None:
+        overlay = build_path_overlay(anchor_geometry, height, width, chevron_phase_m)
+        LAST_RIBBON_GEOMETRY = anchor_geometry
+        return overlay, anchor_geometry["near_v"], anchor_geometry["far_v"]
 
     # Direct mode: the geometry IS the measured future path, projected with no
     # filtering between the measurement and the pixels. The aimed machinery
@@ -1743,12 +1763,354 @@ def direct_future_geometry(smoother, vo_pts):
     if traj is None or len(traj) < 3:
         return None
 
-    geometry = build_ribbon_geometry(traj)
+    # Arc-parameterised build: the band ends where the measurement ends. The
+    # old y(x) build sampled a fixed 4-21 m forward window and extended the
+    # last measured lateral as a constant -- on a 4 m-lookahead track at a turn
+    # onset that drew a 17 m near-straight band aimed at the median.
+    return build_arc_ribbon_geometry(traj)
 
-    if geometry is not None:
-        geometry["traj"] = None    # chevrons, like the aimed band
 
-    return geometry
+# The future-anchor sidecar (future_anchor.py): per-frame polylines of the
+# street pixels the car later drives over, found by chaining ground-plane
+# homographies to the future frames. No world model stands between those
+# anchors and the road, so they survive exactly the moments the flat-ground
+# projection breaks: pull-away heading noise, fast yaw, folded-back turn arcs.
+USE_FUTURE_ANCHOR = os.environ.get("OPTICARVIS_FUTURE_ANCHOR", "1") == "1"
+ANCHOR_GAP_BRIDGE_FRAMES = 5
+ANCHOR_RESAMPLE_M = 0.4
+ANCHOR_SMOOTH_TAPS = 5
+
+
+def ground_from_pixel(u, v):
+    """Inverse of project_ground_point: image pixel -> flat-ground metres."""
+    denom = float(v) - HORIZON_V
+
+    if denom <= 1e-3:
+        return None
+
+    x_fwd = CAM_FOCAL_PX * CAM_HEIGHT_M / denom
+    y_lat = LATERAL_SIGN * (float(u) - VANISH_U) * x_fwd / CAM_FOCAL_PX
+
+    return x_fwd, y_lat
+
+
+def build_arc_ribbon_geometry(path_xy):
+    """Ribbon geometry from a ground polyline, parameterised by ITS OWN arc.
+
+    build_ribbon_geometry models the path as a single-valued lateral offset
+    over a fixed 4-21 m forward window; a real 96-degree turn reaches at most
+    ~12 m of forward distance and folds back, which that representation cannot
+    express. Here the path is resampled along its arclength, lightly box-
+    smoothed IN GROUND COORDINATES (screen-space smoothing is what used to
+    delay bends), given rails perpendicular to the local ground tangent, and
+    projected. It truncates where the data ends instead of extrapolating.
+    """
+    pts = [(float(x), float(y)) for x, y in path_xy if float(x) > MIN_FORWARD_M]
+
+    if len(pts) < 3:
+        return None
+
+    arr = np.asarray(pts, dtype=np.float64)
+    seg = np.hypot(np.diff(arr[:, 0]), np.diff(arr[:, 1]))
+    keep = np.concatenate([[True], seg > 1e-6])
+    arr = arr[keep]
+
+    if len(arr) < 3:
+        return None
+
+    seg = np.hypot(np.diff(arr[:, 0]), np.diff(arr[:, 1]))
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(arc[-1])
+
+    if total < 3.0 * ANCHOR_RESAMPLE_M:
+        return None
+
+    grid = np.arange(0.0, total + 1e-9, ANCHOR_RESAMPLE_M)
+    xs = np.interp(grid, arc, arr[:, 0])
+    ys = np.interp(grid, arc, arr[:, 1])
+
+    if ANCHOR_SMOOTH_TAPS > 1 and len(grid) > ANCHOR_SMOOTH_TAPS:
+        kernel = np.ones(ANCHOR_SMOOTH_TAPS) / float(ANCHOR_SMOOTH_TAPS)
+        pad = ANCHOR_SMOOTH_TAPS // 2
+        xs = np.convolve(np.pad(xs, pad, mode="edge"), kernel, mode="valid")
+        ys = np.convolve(np.pad(ys, pad, mode="edge"), kernel, mode="valid")
+
+    tang_x = np.gradient(xs)
+    tang_y = np.gradient(ys)
+    norm = np.maximum(np.hypot(tang_x, tang_y), 1e-9)
+    # right-of-travel ground normal in the (forward, right-lateral) frame
+    n_x = -tang_y / norm
+    n_y = tang_x / norm
+
+    centre = []
+    left = []
+    right = []
+
+    for i in range(len(xs)):
+        centre_pt = project_ground_point(xs[i], ys[i])
+        left_pt = project_ground_point(xs[i] - n_x[i] * RIBBON_HALF_M,
+                                       ys[i] - n_y[i] * RIBBON_HALF_M)
+        right_pt = project_ground_point(xs[i] + n_x[i] * RIBBON_HALF_M,
+                                        ys[i] + n_y[i] * RIBBON_HALF_M)
+
+        if centre_pt is None or left_pt is None or right_pt is None:
+            continue
+
+        if centre_pt[1] < HORIZON_V + HORIZON_CLIP_MARGIN_PX:
+            continue
+
+        centre.append(centre_pt)
+        left.append(left_pt)
+        right.append(right_pt)
+
+    if len(centre) < 3:
+        return None
+
+    centre_arr = np.array(centre, dtype=np.float32)
+    left_arr = np.array(left, dtype=np.float32)
+    right_arr = np.array(right, dtype=np.float32)
+    polygon = np.round(np.vstack([left_arr, right_arr[::-1]])).astype(np.int32)
+
+    return {
+        "traj": None,                    # chevrons, like the aimed band
+        "ordered": True,                 # centre already runs near -> far
+        "centre": centre_arr,
+        "left": left_arr,
+        "right": right_arr,
+        "polygon": polygon,
+        "near_v": float(np.max(centre_arr[:, 1])),
+        "far_v": float(np.min(centre_arr[:, 1])),
+    }
+
+
+def parse_future_anchors(data, frame_count):
+    """Validate + resolution-scale a future_anchor_track sidecar.
+
+    Returns a per-frame list of Nx3 arrays [u, v, s_m] (or None entries), in
+    the render's pixel space, or None when the sidecar cannot be trusted --
+    the renderer then falls down the ladder to the direct flat-ground path.
+    """
+    if data is None:
+        return None
+
+    if not USE_FUTURE_ANCHOR:
+        print("WARNING: a future-anchor sidecar exists but "
+              "OPTICARVIS_FUTURE_ANCHOR=0 -> ignoring it.")
+        return None
+
+    if data.get("type") != "future_anchor_track" or int(data.get("version", 0)) != 1:
+        print("WARNING: unrecognised future-anchor sidecar "
+              "(type=%r version=%r) -> ignoring it."
+              % (data.get("type"), data.get("version")))
+        return None
+
+    frames = data.get("anchors") or []
+
+    if abs(len(frames) - frame_count) > 2:
+        print("WARNING: future-anchor sidecar covers %d frames but the video "
+              "has %d -> stale sidecar, ignoring it." % (len(frames), frame_count))
+        return None
+
+    scale = float(_RESOLUTION_SCALE_APPLIED or 1.0)
+    calib = data.get("calib") or {}
+    horizon_ref = HORIZON_V / scale
+    vanish_ref = VANISH_U / scale
+    h_skew = abs(float(calib.get("horizon_v", horizon_ref)) - horizon_ref)
+    u_skew = abs(float(calib.get("vanish_u", vanish_ref)) - vanish_ref)
+
+    if h_skew > 8.0 or u_skew > 8.0:
+        print("WARNING: future-anchor sidecar was computed with a different "
+              "camera calibration (skew %.1f/%.1f px) -> stale, ignoring it."
+              % (h_skew, u_skew))
+        return None
+
+    if h_skew > 1.0 or u_skew > 1.0:
+        print("WARNING: future-anchor calibration differs slightly from the "
+              "render's (%.1f/%.1f px); proceeding." % (h_skew, u_skew))
+
+    out = []
+    usable = 0
+
+    for pts in frames:
+        if pts and len(pts) >= 3:
+            arr = np.asarray(pts, dtype=np.float64)
+            arr[:, 0] *= scale
+            arr[:, 1] *= scale
+            out.append(arr)
+            usable += 1
+        else:
+            out.append(None)
+
+    print("Future-anchored ribbon enabled: %d/%d frames have anchors."
+          % (usable, len(out)))
+
+    return out
+
+
+def load_future_anchors_for_job():
+    """The future-anchor sidecar written by future_anchor.py, if present.
+
+    OPTICARVIS_FUTURE_ANCHOR_JSON overrides the path for manual runs.
+    """
+    if not USE_FUTURE_ANCHOR:
+        return None
+
+    path = os.environ.get("OPTICARVIS_FUTURE_ANCHOR_JSON") or workflow_path(
+        "ego_trajectory", segment_tag() + "_future_anchors.json")
+
+    if not os.path.isfile(path):
+        return None
+
+    try:
+        return read_json(path)
+    except (ValueError, OSError) as error:
+        print("WARNING: could not read future anchors %s (%s); rendering "
+              "without them." % (path, type(error).__name__))
+        return None
+
+
+def displace_ground_polyline(ground_pts, offset_fn, s_travelled):
+    """Shift each point perpendicular to the local tangent by offset(s_abs).
+
+    ground_pts: [(x_fwd, y_lat, s_m), ...]. Positive offsets displace to the
+    ego's right of travel (right-positive, matching every lateral in this
+    file). Used to draw the PLAN as a lateral offset riding the anchored
+    driven path, so divergence reads as sideways offset on real street pixels.
+    """
+    if len(ground_pts) < 2:
+        return [(x, y) for x, y, _s in ground_pts]
+
+    xs = np.array([p[0] for p in ground_pts])
+    ys = np.array([p[1] for p in ground_pts])
+    tang_x = np.gradient(xs)
+    tang_y = np.gradient(ys)
+    norm = np.maximum(np.hypot(tang_x, tang_y), 1e-9)
+    n_x = -tang_y / norm
+    n_y = tang_x / norm
+
+    out = []
+
+    for i, (x, y, s_m) in enumerate(ground_pts):
+        offset = float(offset_fn(s_travelled + s_m))
+        out.append((x + n_x[i] * offset, y + n_y[i] * offset))
+
+    return out
+
+
+def anchor_geometry_for_frame(anchor_frames, index, offset_fn=None, s_travelled=0.0):
+    """Ribbon geometry from this frame's future anchors, or None.
+
+    The anchors are already street pixels; they are unprojected to ground
+    metres only as a DRAWING parameterisation (resampling, smoothing, rail
+    offsets) and reprojected with the same model, which round-trips exactly.
+    """
+    if anchor_frames is None or index >= len(anchor_frames):
+        return None
+
+    pts = anchor_frames[index]
+
+    if pts is None:
+        return None
+
+    ground = []
+
+    for u, v, s_m in pts:
+        point = ground_from_pixel(u, v)
+
+        if point is None:
+            continue
+
+        ground.append((point[0], point[1], float(s_m)))
+
+    if len(ground) < 3:
+        return None
+
+    if offset_fn is not None:
+        path = displace_ground_polyline(ground, offset_fn, s_travelled)
+    else:
+        path = [(x, y) for x, y, _s in ground]
+
+    return build_arc_ribbon_geometry(path)
+
+
+def planner_offset_function(planner_track, vo_track, fps):
+    """Signed lateral offset (metres, right-positive) of the PLAN from the
+    DRIVEN path at matched absolute arclength, as a callable, or None.
+
+    Both curves live in the VO track's right-positive world frame; the plan
+    was already flipped once by PLANNER_LATERAL_SIGN in load_planner_track,
+    and no further sign appears here -- introducing one would be the mirror
+    bug the load_planner_track comment warns about. Outside the plan's
+    arclength span the offset fades to zero: the band then shows the driven
+    path rather than an extrapolated plan.
+    """
+    if planner_track is None or not fps:
+        return None
+
+    poses = ego_poses_from_track(vo_track)
+
+    if poses is None:
+        return None
+
+    frame_t0 = int(round(planner_track["t0_s"] * fps))
+
+    if not 0 <= frame_t0 < len(poses):
+        return None
+
+    arc = [0.0]
+
+    for (x0, y0, _p0), (x1, y1, _p1) in zip(poses, poses[1:]):
+        arc.append(arc[-1] + math.hypot(x1 - x0, y1 - y0))
+
+    arc = np.asarray(arc)
+    drv_x = np.array([p[0] for p in poses], dtype=np.float64)
+    drv_y = np.array([p[1] for p in poses], dtype=np.float64)
+
+    x0, y0, psi0 = poses[frame_t0]
+    cos0, sin0 = math.cos(psi0), math.sin(psi0)
+    plan_x = []
+    plan_y = []
+
+    for px, py in planner_track["points"]:
+        plan_x.append(x0 + cos0 * px - sin0 * py)
+        plan_y.append(y0 + sin0 * px + cos0 * py)
+
+    plan_x = np.asarray([x0] + plan_x)
+    plan_y = np.asarray([y0] + plan_y)
+    plan_arc = np.concatenate(
+        [[0.0], np.cumsum(np.hypot(np.diff(plan_x), np.diff(plan_y)))])
+
+    s_base = float(arc[frame_t0])
+    span = float(plan_arc[-1])
+
+    if span < 1.0:
+        return None
+
+    def offset(s_abs):
+        s_rel = s_abs - s_base
+
+        if s_rel < 0.0 or s_rel > span:
+            return 0.0
+
+        px = float(np.interp(s_rel, plan_arc, plan_x))
+        py = float(np.interp(s_rel, plan_arc, plan_y))
+        dx = float(np.interp(s_abs, arc, drv_x))
+        dy = float(np.interp(s_abs, arc, drv_y))
+        tx = float(np.interp(s_abs + 0.5, arc, drv_x)) - float(np.interp(s_abs - 0.5, arc, drv_x))
+        ty = float(np.interp(s_abs + 0.5, arc, drv_y)) - float(np.interp(s_abs - 0.5, arc, drv_y))
+        norm = math.hypot(tx, ty)
+
+        if norm < 1e-6:
+            return 0.0
+
+        # right-of-travel normal; the offset is the divergence resolved onto it
+        value = ((px - dx) * (-ty) + (py - dy) * tx) / norm
+        # fade at both ends of the plan span so the band never steps
+        fade = min(1.0, s_rel / 1.0, (span - s_rel) / 2.0)
+
+        return value * max(0.0, fade)
+
+    return offset
 
 
 def load_planner_track():
@@ -2470,6 +2832,21 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
               % ("world (validated VO poses)" if planner_ego_poses
                  else "plan poses (no validated VO)"))
 
+    planner_offset = (planner_offset_function(planner_track, vo_track, fps)
+                      if RIBBON_SOURCE == "planner" else None)
+    anchor_frames = parse_future_anchors(load_future_anchors_for_job(), frame_count)
+
+    # In planner mode the anchors only serve as the street-true carrier for
+    # the plan's lateral offset; without a computable offset, drawing the bare
+    # driven path would misrepresent the plan, so the planner machinery below
+    # keeps the frame instead.
+    if RIBBON_SOURCE == "planner" and planner_offset is None and anchor_frames is not None:
+        print("Planner ribbon: no plan-vs-driven offset available; "
+              "anchors unused, falling back to the planner projection.")
+        anchor_frames = None
+
+    anchor_last = {"geometry": None, "age": 0}
+
     ramp, label_per_frame = build_anim_schedule(timeline, frame_count, fps)
     on_frames = int((ramp > 0.001).sum())
     print("timeline: %d/%d frames show the overlay." % (on_frames, frame_count))
@@ -2634,12 +3011,30 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
             else (index / fps) * CHEVRON_SPEED_MPS if fps else 0.0
         )
 
+        anchor_geom = anchor_geometry_for_frame(
+            anchor_frames, index, offset_fn=planner_offset,
+            s_travelled=(travelled_m[index]
+                         if travelled_m is not None and index < len(travelled_m) else 0.0))
+
+        # Bridge short anchor gaps by holding the last geometry: a brief
+        # freeze reads better than the band popping to a different source.
+        if anchor_geom is not None:
+            anchor_last["geometry"] = anchor_geom
+            anchor_last["age"] = 0
+        elif (anchor_last["geometry"] is not None
+                and anchor_last["age"] < ANCHOR_GAP_BRIDGE_FRAMES):
+            anchor_last["age"] += 1
+            anchor_geom = anchor_last["geometry"]
+        else:
+            anchor_last["geometry"] = None
+
         frame_overlay, frame_near_v, frame_far_v = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state, lookahead_offset,
             lane_data=lane_data, lane_state=lane_state, vo_pts=vo_pts, vo_state=vo_state,
             chevron_phase_m=phase_m,
             direct_geometry=(direct_future_geometry(path_smoother, vo_pts)
-                             if RIBBON_SOURCE == "perception" else None))
+                             if RIBBON_SOURCE == "perception" else None),
+            anchor_geometry=anchor_geom)
         base = (orig.astype(np.float32) * (1.0 - BACKGROUND_DIM_ALPHA * ramp_value)).astype(np.uint8)
         reveal = reveal_rows_for(ramp_value, frame_near_v, frame_far_v, height)
         blend_path(base, frame_overlay, occlusion, gain=reveal)
@@ -2653,7 +3048,8 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
 
         if dump is not None:
             dump.frame(index, ramp_value, label_text, LAST_RIBBON_GEOMETRY,
-                       selected_persons, selected_vehicles, occlusion)
+                       selected_persons, selected_vehicles, occlusion,
+                       phase_m=phase_m)
 
         def compose(with_vehicles):
             layer = base.copy()
@@ -2772,6 +3168,17 @@ def render_video(effect_plan, vo_track=None):
         print("Planner ribbon anchoring: %s"
               % ("world (validated VO poses)" if planner_ego_poses
                  else "plan poses (no validated VO)"))
+
+    planner_offset = (planner_offset_function(planner_track, vo_track, fps)
+                      if RIBBON_SOURCE == "planner" else None)
+    anchor_frames = parse_future_anchors(load_future_anchors_for_job(), frame_count)
+
+    if RIBBON_SOURCE == "planner" and planner_offset is None and anchor_frames is not None:
+        print("Planner ribbon: no plan-vs-driven offset available; "
+              "anchors unused, falling back to the planner projection.")
+        anchor_frames = None
+
+    anchor_last = {"geometry": None, "age": 0}
 
     if overlay is None:
         print("Could not build road path geometry; rendering without a path ribbon.")
@@ -2916,13 +3323,30 @@ def render_video(effect_plan, vo_track=None):
             else (rendered_frames / fps) * CHEVRON_SPEED_MPS if fps else 0.0
         )
 
+        anchor_geom = anchor_geometry_for_frame(
+            anchor_frames, rendered_frames, offset_fn=planner_offset,
+            s_travelled=(travelled_m[rendered_frames]
+                         if travelled_m is not None and rendered_frames < len(travelled_m)
+                         else 0.0))
+
+        if anchor_geom is not None:
+            anchor_last["geometry"] = anchor_geom
+            anchor_last["age"] = 0
+        elif (anchor_last["geometry"] is not None
+                and anchor_last["age"] < ANCHOR_GAP_BRIDGE_FRAMES):
+            anchor_last["age"] += 1
+            anchor_geom = anchor_last["geometry"]
+        else:
+            anchor_last["geometry"] = None
+
         frame_overlay, _, _ = resolve_frame_overlay(
             road_binary, height, width, overlay, frame_geometry, aim_state,
             lane_data=lane_data, lane_state=lane_state,
             vo_pts=vo_pts, vo_state=vo_state,
             chevron_phase_m=phase_m,
             direct_geometry=(direct_future_geometry(path_smoother, vo_pts)
-                             if RIBBON_SOURCE == "perception" else None))
+                             if RIBBON_SOURCE == "perception" else None),
+            anchor_geometry=anchor_geom)
         base = dim_background(result.orig_img)
         blend_path(base, frame_overlay, occlusion)
 
@@ -2952,7 +3376,8 @@ def render_video(effect_plan, vo_track=None):
         # whole clip (the gate said explain), so the ramp dumps as 1.0.
         if dump is not None:
             dump.frame(rendered_frames, 1.0, label_text, LAST_RIBBON_GEOMETRY,
-                       selected_persons, selected_vehicles, occlusion)
+                       selected_persons, selected_vehicles, occlusion,
+                       phase_m=phase_m)
 
         rendered_frames += 1
 

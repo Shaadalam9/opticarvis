@@ -145,6 +145,18 @@ def main():
         if completed.returncode != 0:
             print("ego_trajectory failed (code %d); ribbon stays straight in the ego lane."
                   % completed.returncode)
+        elif os.environ.get("OPTICARVIS_FUTURE_ANCHOR", "1") == "1":
+            # Trace the driven path onto the actual street pixels of every
+            # frame (homography chains to the future frames). Needs the VO
+            # track's ego poses, hence inside this branch. A failure only
+            # costs the anchor precision: the renderer falls back to the
+            # direct flat-ground projection of the same VO path.
+            anchor_script = os.path.join(SRC_DIR, "future_anchor.py")
+            completed = subprocess.run([sys.executable, anchor_script], cwd=SRC_DIR)
+
+            if completed.returncode != 0:
+                print("future_anchor failed (code %d); renderer falls back to "
+                      "the direct flat-ground path." % completed.returncode)
 
     run_step("final_preview_renderer.py")
 

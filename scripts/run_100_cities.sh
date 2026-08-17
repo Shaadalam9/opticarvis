@@ -41,6 +41,13 @@ export OPTICARVIS_RIBBON_SOURCE="${OPTICARVIS_RIBBON_SOURCE:-perception}"
 # checkout + culane_res34.pth (see README "External repositories").
 export OPTICARVIS_VO_TRAJECTORY="${OPTICARVIS_VO_TRAJECTORY:-1}"
 
+# Future-anchored ribbon (future_anchor.py stage): the driven path is traced
+# onto the actual street pixels of every frame by chaining ground-plane
+# homographies to the future frames, so the band survives pull-away heading
+# noise, fast yaw and folded-back turn arcs. ~30-60 s CPU per clip; falls back
+# to the direct flat-ground projection when a clip's homographies fail.
+export OPTICARVIS_FUTURE_ANCHOR="${OPTICARVIS_FUTURE_ANCHOR:-1}"
+
 # The in-code defaults for these two are not valid Hugging Face repo ids; the
 # render fails out of the box without them (see README "Models used").
 export OPTICARVIS_ROAD_SEG_MODEL="${OPTICARVIS_ROAD_SEG_MODEL:-nvidia/segformer-b0-finetuned-cityscapes-1024-1024}"

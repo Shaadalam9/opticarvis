@@ -121,12 +121,32 @@ def apply_style_to_renderer(style, width, height, camera):
     R.CAM_HEIGHT_M = float(camera["cam_height_m"])
 
 
-def ribbon_geometry_from_centre(centre, near_v, far_v):
+def ribbon_geometry_from_centre(centre, near_v, far_v, ordered=False):
     """Rebuild the full geometry dict the renderer's draw code expects.
 
     Edges derive from the centreline exactly as aimed_ribbon_geometry builds
     them, which is what makes the ribbon width a style parameter.
+
+    ordered centrelines (version-2 dumps: future-anchored / direct geometry)
+    are arc-ordered paths that may run across the image; horizontal edges
+    would collapse a turn's band to a sliver, so they are rebuilt through the
+    renderer's own ground-tangent builder -- same width style, correct rails.
     """
+    if ordered:
+        ground = []
+
+        for u, v in np.asarray(centre, dtype=np.float64):
+            point = R.ground_from_pixel(u, v)
+
+            if point is not None:
+                ground.append(point)
+
+        if len(ground) >= 3:
+            geometry = R.build_arc_ribbon_geometry(ground)
+
+            if geometry is not None:
+                return geometry
+
     centre_arr = np.asarray(centre, dtype=np.float32)
     v = centre_arr[:, 1]
     half = R.RIBBON_HALF_M * (v - R.HORIZON_V) / R.CAM_HEIGHT_M
@@ -317,9 +337,15 @@ def restyle(geometry_path, style_path, output_dir, h264=True):
 
         if ribbon_visible and ribbon is not None:
             geometry = ribbon_geometry_from_centre(
-                ribbon["centre"], ribbon["near_v"], ribbon["far_v"]
+                ribbon["centre"], ribbon["near_v"], ribbon["far_v"],
+                ordered=bool(ribbon.get("ordered")),
             )
-            phase_m = (index / fps) * chevron_speed if fps else 0.0
+            # Prefer the phase the render actually used (travelled metres);
+            # recomputing from index/fps un-grounds street-nailed marks.
+            if ribbon.get("phase_m") is not None:
+                phase_m = float(ribbon["phase_m"])
+            else:
+                phase_m = (index / fps) * chevron_speed if fps else 0.0
             overlay = R.build_path_overlay(geometry, height, width, phase_m)
             reveal = R.reveal_rows_for(ramp_value, geometry["near_v"],
                                        geometry["far_v"], height)

@@ -21,6 +21,16 @@ half = half_width_m * (v - HORIZON_V) / CAM_HEIGHT_M, which makes the ribbon
 width itself restylable. Chevron positions are a pure function of the
 centreline, the frame index and the chevron speed, so they are recomputed at
 composite time -- speed and spacing are restylable too.
+
+Version 2 adds two per-frame ribbon fields, both optional for readers:
+    "ordered": the centreline is an arc-ordered path (future-anchored or
+        direct geometry) rather than the row-convention aimed centreline;
+        the compositor rebuilds its rails perpendicular to the ground tangent
+        (final_preview_renderer.build_arc_ribbon_geometry) instead of
+        horizontally, or a turn's band collapses to a sliver.
+    "phase_m": the chevron phase the render actually used (travelled metres).
+        Recomputing phase from index/fps at composite time un-grounds the
+        marks the render nailed to the street.
 """
 
 import gzip
@@ -31,7 +41,7 @@ import cv2
 import numpy as np
 
 
-DUMP_VERSION = 1
+DUMP_VERSION = 2
 
 
 def _round_points(points, decimals=2):
@@ -103,7 +113,7 @@ class GeometryDump(object):
         self.close()
 
     def frame(self, index, ramp_value, label_text, ribbon_geometry,
-              persons, vehicles, occlusion):
+              persons, vehicles, occlusion, phase_m=None):
         if not self.enabled:
             return
 
@@ -124,6 +134,12 @@ class GeometryDump(object):
                     "near_v": round(float(ribbon_geometry["near_v"]), 2),
                     "far_v": round(float(ribbon_geometry["far_v"]), 2),
                 }
+
+                if ribbon_geometry.get("ordered"):
+                    record["ribbon"]["ordered"] = True
+
+                if phase_m is not None:
+                    record["ribbon"]["phase_m"] = round(float(phase_m), 3)
 
             self._write(record)
 
