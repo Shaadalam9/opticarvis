@@ -100,7 +100,8 @@ directory above has an `OPTICARVIS_*` override; see the README Configuration tab
 | `src/final_preview_renderer.py` | The renderer: ribbon geometry, lane-anchor tracking, VO blend, chevrons, compositing, both render loops |
 | `src/render_timeline_clip.py` | **The CLI entry point for renders** (derives output names, transcodes, records workflow state) |
 | `src/scene_models.py` | Lazy models: SegFormer road seg, Depth Anything V2, UFLDv2 lane instances, YOLOP (legacy) |
-| `src/ego_trajectory.py` | Future-frame visual odometry → per-frame future path JSON (the ONLY curvature source for real turns) |
+| `src/ego_trajectory.py` | Future-frame visual odometry → per-frame future path JSON (the metric curvature source; also supplies the anchors' arclength) |
+| `src/future_anchor.py` | Chains ground-plane homographies to the future frames → per-frame polylines of the street pixels the car will drive over. Highest-precedence ribbon source; the only one that survives real turns |
 | `src/ego_motion.py` | Legacy phase-correlation pan track; feeds the disabled look-ahead only |
 | `src/gemma_gate_timeline.py`, `src/gemma_reasoning_module.py` | Sliding-window VLM gate → timeline JSON |
 | `src/alpamayo_stream.py` | Simulated per-timestep planner output feeding the gate |
@@ -123,6 +124,11 @@ python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag>
 # with turn following: build the VO track, then enable it
 python src/ego_trajectory.py <clip.mp4> vo_traj.json
 OPTICARVIS_VO_TRAJECTORY=1 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
+
+# anchored on the road (what the batch does): add the homography-chain pass
+python src/future_anchor.py <clip.mp4> vo_traj.json anchors.json
+OPTICARVIS_VO_TRAJECTORY=1 OPTICARVIS_FUTURE_ANCHOR_JSON=anchors.json \
+  python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
 ```
 
 `""` skips an optional argv slot. Supplying a track without its env flag warns
@@ -145,6 +151,24 @@ Geometry (see ENGINEERING.md §1):
 Tracking (§2):
 - A detection dropout is **no new information** — coast, never blend the target
   toward `VANISH_U`/any prior. Trust scales *gains*, not values.
+
+Future anchoring (`src/future_anchor.py`):
+- The anchors' placement must stay **model-free**. Their whole value is that they
+  are found by image registration, so heading, calibration and slope errors cancel.
+  Ground metres may parameterise the *drawing* (resampling, smoothing, rail
+  offsets); they must never re-derive an anchor's position.
+- Rails offset perpendicular to the **ground** tangent, then project. Offsetting
+  perpendicular in pixel space fans the band into a wedge wherever the path runs
+  across the image — on screen, "perpendicular" is partly depth and must
+  foreshorten.
+- A band ends where its data ends. Never extrapolate a measured path to fill a
+  fixed forward window: constant-extending 1.26 m of measured lateral out to 21 m
+  is exactly how the ribbon came to point at a median mid-turn.
+- A hop below the RANSAC inlier floor truncates the chain. Truncating is honest;
+  fabricating anchors is not.
+- Path geometry is arc-parameterised, never `y(x_forward)`: a real turn folds back
+  (max ~12 m forward on a 96° turn) and a single-valued lateral function cannot
+  express it.
 
 Visual odometry (§3):
 - Emitted lateral is **right-positive** (`lateral_convention` in the track

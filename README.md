@@ -112,9 +112,11 @@ flowchart TD
     A[Dashcam clip] --> B[src/alpamayo_stream.py<br/>per-timestep planner output]
     B --> C[src/gemma_gate_timeline.py<br/>VLM: explain, or stay clean?]
     A --> D[src/ego_trajectory.py<br/>future-frame visual odometry<br/>optional, for turns]
+    D --> G[src/future_anchor.py<br/>homography chain to future frames<br/>anchors the path on the road]
     A --> E[final_preview_renderer.py]
     C -->|gate timeline| E
     D -->|future path| E
+    G -->|street-pixel anchors| E
     E --> F[Two MP4s +<br/>workflow state record]
 
     subgraph P [per frame, inside the renderer]
@@ -137,7 +139,12 @@ flowchart TD
 3. **Ego trajectory** (`ego_trajectory.py`, optional) — planar visual odometry that
    reconstructs the vehicle's real path from the clip's future frames, so the ribbon
    can follow a genuine turn.
-4. **Render** (`render_timeline_clip.py` → `final_preview_renderer.py`) — builds the
+4. **Future anchors** (`future_anchor.py`, optional) — the clip is pre-recorded, so
+   the ground the car will occupy is *visible* in its later frames. This chains
+   ground-plane homographies between frames and maps the ego's near-future position
+   back into every earlier frame, yielding per-frame polylines of the street pixels
+   the car actually drives over. See [Anchoring the path](#anchoring-the-path-to-the-road).
+5. **Render** (`render_timeline_clip.py` → `final_preview_renderer.py`) — builds the
    ribbon, highlights, occlusion and distance labels, animates the overlay on and
    off per the gate timeline, transcodes to H.264, and records the run.
 
@@ -161,6 +168,55 @@ point, and the final composite:
 
 A deliberate consequence: **gentle curves render as near-straight.** That is the
 chosen trade — never confidently point somewhere the vehicle is not going.
+
+### Anchoring the path to the road
+
+The table above describes the *projected* sources: each reconstructs the future in
+world coordinates and pushes it through the flat-ground camera model. That works on
+lane-following roads and fails on real turns, for a reason no amount of tuning
+fixes. A ribbon expressed as a lateral offset over a fixed forward window,
+`y(x_forward)`, cannot represent an arc that folds back — a 96-degree intersection
+turn reaches only ~12 m of forward distance and then curls sideways — and every
+modelling error (heading noise at pull-away, calibration drift, a road that is not
+flat) lands on top of that.
+
+`future_anchor.py` removes the model from the placement entirely. The ground point
+`ANCHOR_REF_AHEAD_M` ahead of the camera sits at one **fixed pixel** in every frame,
+so the patch of road the car occupies at *t+k* can be carried back into frame *t*
+purely by image registration:
+
+1. Per consecutive pair, features in a road band are tracked (LK optical flow) and a
+   ground-plane homography is fitted with RANSAC — moving traffic does not move like
+   the road plane, so it is rejected as outliers.
+2. Chains reach across time by composing hops. Keyframe hops of
+   `OPTICARVIS_ANCHOR_KEYFRAME_STRIDE` frames cut a long chain to ~n/stride
+   matrices, which is what keeps drift small through fast yaw; the near field keeps
+   dense per-frame hops so the band stays smooth.
+3. The back-projected pixels become the frame's anchor polyline, each tagged with
+   its arclength ahead of the ego (from pose deltas, which carry no heading bias).
+
+The result is that the band's vertices *are* street pixels: heading error,
+calibration error and ground slope cancel by construction. A hop that loses RANSAC
+consensus (a truck sweeping across the camera does this) **truncates** the chain
+rather than inventing anchors, and the renderer falls back a rung.
+
+Two implementation notes that are easy to get wrong. Rails must be offset
+perpendicular to the **ground** tangent and then reprojected — offsetting
+perpendicular in pixel space fans the band open into a wedge wherever the path runs
+sideways across the image, because on screen "perpendicular" is partly depth and has
+to foreshorten. And in planner mode the plan is drawn as a *lateral offset from the
+driven path at matched arclength*, applied along the anchors, so the planner ribbon
+inherits the anchors' correctness and its divergence from the human driver reads as
+sideways displacement on real asphalt.
+
+Per-frame fallback ladder, top wins:
+
+| Rung | Source | Used when |
+|---|---|---|
+| 1 | Future anchors | Sidecar present and this frame has a usable polyline (short gaps are bridged) |
+| 2 | Direct VO projection | No sidecar, or the chain broke here; needs a validated VO track |
+| 3 | Lane-aimed ribbon | VO missing or rejected by its heading cross-check |
+| 4 | Static trajectory overlay | No road mask / aimed ribbon disabled |
 
 ## Models used
 
@@ -453,6 +509,11 @@ needs no code edits.
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |
 | `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
 | `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns |
+| `OPTICARVIS_FUTURE_ANCHOR` | `1` | Trace the driven path onto the actual street pixels by chaining ground homographies to the future frames (`src/future_anchor.py`, runs after the VO stage). `0` renders from the projected VO path instead. See [Anchoring the path](#anchoring-the-path-to-the-road) |
+| `OPTICARVIS_ANCHOR_REF_AHEAD_M` | `4.5` | Ground distance ahead of the camera whose fixed pixel is carried back from each future frame |
+| `OPTICARVIS_ANCHOR_KEYFRAME_STRIDE` | `8` | Frames per keyframe hop; longer hops mean fewer matrix compositions and less chain drift, at coarser sampling |
+| `OPTICARVIS_ANCHOR_MIN_INLIER_RATIO` | `0.5` | RANSAC inlier floor per hop. Below it the chain truncates rather than fabricating anchors |
+| `OPTICARVIS_FUTURE_ANCHOR_JSON` | — | Read anchors from an explicit path (manual runs outside the batch layout) |
 | `OPTICARVIS_EGO_LOOKAHEAD` | `0` | Legacy phase-correlation look-ahead; superseded by VO |
 | `OPTICARVIS_UFLD_REPO` / `_WEIGHTS` | local paths | UFLDv2 checkout and checkpoint |
 | `OPTICARVIS_GATE_REASONING` | — | Override the planner reasoning trace (testing) |
