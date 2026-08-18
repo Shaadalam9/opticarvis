@@ -227,6 +227,11 @@ the inhabited world, large countries get several cities without a
 one-per-country rule, and every selected city carries a design weight that
 makes country-level estimates defensible.
 
+The sampler itself lives in its own package,
+[`lpm-sampling`](https://github.com/M-Colley/lpm-sampling) — it was written for
+this study, then extracted so it is useful and citable on its own. It is a
+normal pinned dependency here.
+
 ```bash
 .venv/bin/python src/city_sampler.py --frame cities.csv --n 150 --seed 20260818 \
     --alpha 0.75 --footage-column footage_hours --min-footage-hours 1.0

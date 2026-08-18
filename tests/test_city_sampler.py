@@ -25,7 +25,7 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 import city_sampler as CS      # noqa: E402
-import lpm as LPM              # noqa: E402
+import lpm_sampling as LPM     # noqa: E402
 
 
 def clustered_frame(n_points=600, seed=3):

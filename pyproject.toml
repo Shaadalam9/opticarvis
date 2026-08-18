@@ -27,6 +27,11 @@ dependencies = [
     "scikit-learn>=1.9.0",
     "accelerate>=1.14.0",
     "physical-ai-av>=0.2.2",
+    # Spatially balanced city selection (src/city_sampler.py). Developed here
+    # first, then extracted so it is usable — and citable — on its own:
+    # github.com/M-Colley/lpm-sampling. Pinned to a tag; uv.lock records the
+    # exact commit.
+    "lpm-sampling>=0.1.0",
     # ByteTrack's linear assignment step. Nothing in src/ imports it, but
     # ultralytics does not declare it either -- model.track() imports it lazily
     # and, when it is absent, pip installs it mid-render from inside the
@@ -63,5 +68,9 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
+# Not on PyPI yet, so it resolves from the public repo. Pinned to a tag rather
+# than a branch: a moving branch would let a dependency change under a
+# `uv sync --frozen` that is supposed to be reproducible.
+lpm-sampling = { git = "https://github.com/M-Colley/lpm-sampling.git", tag = "v0.1.0" }
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]

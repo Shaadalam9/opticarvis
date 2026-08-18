@@ -106,7 +106,7 @@ directory above has an `OPTICARVIS_*` override; see the README Configuration tab
 | `src/gemma_gate_timeline.py`, `src/gemma_reasoning_module.py` | Sliding-window VLM gate → timeline JSON |
 | `src/alpamayo_stream.py` | Simulated per-timestep planner output feeding the gate |
 | `src/pipeline_common.py` | Paths, env-overridable clip selection, `transcode_h264`, `clip_stem` |
-| `src/city_sampler.py`, `src/lpm.py` | Which cities to film: spatially balanced probability sampling (Local Pivotal Method), design weights included |
+| `src/city_sampler.py` | Which cities to film: frame eligibility, probabilities proportional to population, diagnostics, the design-weight manifest. The sampler itself is the external [`lpm-sampling`](https://github.com/M-Colley/lpm-sampling) package (extracted from this repo), pinned by tag in `pyproject.toml` |
 | `docs/ENGINEERING.md` | Measured evidence behind every geometry/tracking decision |
 | `docs/CITY_SAMPLING.md` | Why the cities are drawn rather than picked, with references |
 

@@ -71,11 +71,13 @@ requires only a distance metric — which is why it is what this repo implements
   to cross-check against if a reviewer asks.
 - **R, `spsurvey`** (GPL-3, US EPA) — <https://github.com/USEPA/spsurvey>.
   `grts()`, `sp_balance()`.
-- **Python** — there is no maintained package for either method. PyPI has no
-  `pygrts`; the only credible Python GRTS code is a single-author GitHub
-  project, and searches for a Python LPM return unrelated projects. Hence
-  `src/lpm.py` here implements LPM directly (numpy only, ~400 lines) with a
-  Monte Carlo validation harness.
+- **Python** — there was no maintained package for either method when this was
+  written: PyPI has no `pygrts`, the only credible Python GRTS code is a
+  single-author GitHub project, and searches for a Python LPM return unrelated
+  projects. So the implementation was written here and then **extracted into its
+  own package**, [`lpm-sampling`](https://github.com/M-Colley/lpm-sampling)
+  (MIT, numpy only), which this repo now depends on. It ships its own tests and
+  a harness that compares it against the R reference on a shared frame.
 
 ## Three things the implementation must get right
 

@@ -706,6 +706,14 @@ wheels = [
 ]
 
 [[package]]
+name = "lpm-sampling"
+version = "0.1.0"
+source = { git = "https://github.com/M-Colley/lpm-sampling.git?tag=v0.1.0#08155ffe242dcf1c396f230f591657897e8cb22b" }
+dependencies = [
+    { name = "numpy" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1131,6 +1139,7 @@ dependencies = [
     { name = "accelerate" },
     { name = "bs4" },
     { name = "lap" },
+    { name = "lpm-sampling" },
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pandas" },
@@ -1154,6 +1163,7 @@ requires-dist = [
     { name = "accelerate", specifier = ">=1.14.0" },
     { name = "bs4", specifier = ">=0.0.2" },
     { name = "lap", specifier = ">=0.5.12" },
+    { name = "lpm-sampling", git = "https://github.com/M-Colley/lpm-sampling.git?tag=v0.1.0" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
     { name = "pandas", specifier = ">=3.0.3" },

@@ -9,8 +9,11 @@ Selecting one city per country cannot do this. It forces India to a single
 arbitrary city -- Patna rather than Delhi -- while giving Luxembourg the same
 allocation, and it produces no inclusion probabilities at all.
 
-This module uses the LOCAL PIVOTAL METHOD (src/lpm.py; Grafstrom, Lundstrom &
-Schelin 2012). Each city gets an inclusion probability proportional to its
+The sampler is the LOCAL PIVOTAL METHOD, from the lpm-sampling package
+(github.com/M-Colley/lpm-sampling; Grafstrom, Lundstrom & Schelin 2012) -- it
+was written for this study and then extracted, so this module is the
+study-facing layer: frame eligibility, imputation, diagnostics and the design
+manifest. Each city gets an inclusion probability proportional to its
 population; the sampler repeatedly makes a city and its nearest neighbour
 compete for their combined probability, so selecting one pushes probability out
 of its neighbourhood and the sample spreads itself. Every city's inclusion
@@ -60,7 +63,7 @@ SRC = os.path.dirname(os.path.abspath(__file__))
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from lpm import lpm, pi_from_size, spatial_balance, systematic_pps  # noqa: E402
+from lpm_sampling import lpm, pi_from_size, spatial_balance, systematic_pps  # noqa: E402
 
 EARTH_RADIUS_KM = 6371.0088
 
