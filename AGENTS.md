@@ -106,7 +106,9 @@ directory above has an `OPTICARVIS_*` override; see the README Configuration tab
 | `src/gemma_gate_timeline.py`, `src/gemma_reasoning_module.py` | Sliding-window VLM gate → timeline JSON |
 | `src/alpamayo_stream.py` | Simulated per-timestep planner output feeding the gate |
 | `src/pipeline_common.py` | Paths, env-overridable clip selection, `transcode_h264`, `clip_stem` |
+| `src/city_sampler.py`, `src/lpm.py` | Which cities to film: spatially balanced probability sampling (Local Pivotal Method), design weights included |
 | `docs/ENGINEERING.md` | Measured evidence behind every geometry/tracking decision |
+| `docs/CITY_SAMPLING.md` | Why the cities are drawn rather than picked, with references |
 
 Outputs land in `<PROJECT_ROOT>/workflow_outputs/final_renders/` — inside the repo
 but **gitignored**; videos are never committed. Filenames derive from the rendered

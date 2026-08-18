@@ -218,6 +218,24 @@ Per-frame fallback ladder, top wins:
 | 3 | Lane-aimed ribbon | VO missing or rejected by its heading cross-check |
 | 4 | Static trajectory overlay | No road mask / aimed ribbon disabled |
 
+## Choosing the cities
+
+Which cities get filmed is a sampling decision, not a curation one, and
+`src/city_sampler.py` makes it one: cities are drawn with the Local Pivotal
+Method at probability proportional to population, so the sample spreads over
+the inhabited world, large countries get several cities without a
+one-per-country rule, and every selected city carries a design weight that
+makes country-level estimates defensible.
+
+```bash
+.venv/bin/python src/city_sampler.py --frame cities.csv --n 150 --seed 20260818 \
+    --alpha 0.75 --footage-column footage_hours --min-footage-hours 1.0
+```
+
+Full rationale, references and the traps (eligibility must filter the frame
+*before* the draw; coordinates must be unit-sphere, never raw degrees) are in
+**[docs/CITY_SAMPLING.md](docs/CITY_SAMPLING.md)**.
+
 ## Models used
 
 Every checkpoint is named in one place — the **Models** block of
@@ -502,7 +520,7 @@ needs no code edits.
 | `OPTICARVIS_PLANNER_LATERAL_SIGN` | `-1` | Alpamayo's ego frame is FLU (+y left); the renderer is right-positive. `-1` converts; changing it mirrors every planned turn |
 | `OPTICARVIS_AUTO_CALIBRATE` | `1` | Estimate each clip's vanishing point/horizon (`src/auto_calibrate.py`) before the planner, VO and renderer consume the camera constants. An untrusted estimate writes nothing and the defaults hold |
 | `OPTICARVIS_CALIBRATION_DIR` | `<workflow_outputs>/calibration` | Where the planner wrapper looks for per-clip calibration files (set for the adapter subprocess by the batch) |
-| `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv` |
+| `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv`. Note this truncates by FILE ORDER, so emitting extra rows "for headroom" turns a probability sample into "the first N rows of a file" — see [Choosing the cities](docs/CITY_SAMPLING.md) |
 | `OPTICARVIS_CITY_FOOTAGE_S` | `3600` | Secondary per-city budget. It accrues `STRIDE_S` per clip, not `CLIP_LENGTH_S`, so it is a poor way to ask for *n* clips — use `OPTICARVIS_CLIPS_PER_CITY` |
 | `OPTICARVIS_CLIP_LENGTH_S` | `30` | Clip length in seconds |
 | `OPTICARVIS_STRIDE_S` | `60` | Gap between successive clip starts within a city |
