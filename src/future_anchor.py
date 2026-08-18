@@ -66,9 +66,28 @@ CAM_HEIGHT_M = 1.30
 HORIZON_V = 448.0
 VANISH_U = 636.0
 
-# Feature band for the ground homography (calibration rows). The top edge sits
-# well below the horizon so fences and buildings cannot join the fit.
-GROUND_BAND = (470, 714)
+# Feature band for the ground homography, as a METRIC forward window. The band
+# used to be hardcoded rows (470, 714) -- which silently encoded the dev rig's
+# horizon of 448, since row -> distance is d = f*H/(v - horizon). On a rig whose
+# horizon sits elsewhere those same rows sample a different slab of world: 125 px
+# too low on one clip put the whole band on the ego vehicle's own bonnet, and
+# RANSAC then fitted the bonnet -- a rigid plane that never moves -- instead of
+# the road. Every hop came back as an identity matrix, the chain "succeeded",
+# and the pipeline reported a moving car (23-43 km/h on its own speed OSD) as
+# stationary. Deriving the rows from the clip's calibration keeps the band on
+# the same stretch of road for every rig.
+GROUND_BAND_NEAR_M = 5.0
+GROUND_BAND_FAR_M = 59.0
+GROUND_BAND_FALLBACK = (470, 714)
+
+# Bonnet guard. A metric band alone is not enough: a tall bonnet can still reach
+# into the 5 m row. The bonnet is rigid with the camera, so with the vehicle
+# moving its rows show near-zero optical flow while the road above streams --
+# that contrast is what identifies it. (Frame differencing does not: the bonnet
+# carries moving reflections and reads as mostly non-static.)
+HOOD_STATIC_PX = 0.5
+HOOD_MOVING_PX = 4.0
+HOOD_PROBE_ROWS = 24
 MAX_FEATURES = 600
 RANSAC_THRESH_PX = 2.5
 
@@ -106,10 +125,94 @@ def gray_frame(frame):
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
-def estimate_hop(gray_a, gray_b):
+def ground_band_rows(calib, height=CALIB_REF_HEIGHT):
+    """Image rows covering GROUND_BAND_NEAR_M..GROUND_BAND_FAR_M of road.
+
+    Falls back to the historical constant when no calibration is available, so
+    a dev-rig clip is bit-identical to before.
+    """
+    if not calib:
+        return GROUND_BAND_FALLBACK
+
+    horizon = float(calib["horizon_v"])
+    reach = float(calib["focal_px"]) * float(calib["cam_height_m"])
+    top = int(round(horizon + reach / GROUND_BAND_FAR_M))
+    bottom = int(round(horizon + reach / GROUND_BAND_NEAR_M))
+    top = max(top, int(round(horizon)) + 4)
+    bottom = min(bottom, height - 6)
+
+    if bottom - top < 40:
+        return GROUND_BAND_FALLBACK
+
+    return (top, bottom)
+
+
+def detect_hood_row(grays, band, samples=12):
+    """Topmost row of the ego vehicle's bonnet, or None when it is not in view.
+
+    Measured once per clip on frame pairs that actually move: scanning up from
+    the bottom, bonnet rows hold still (< HOOD_STATIC_PX) while road rows stream
+    (> HOOD_MOVING_PX). Returns the row to clamp the band's lower edge above.
+    """
+    if len(grays) < 4:
+        return None
+
+    height = grays[0].shape[0]
+    step = max(1, len(grays) // max(samples, 1))
+    displacement = {}
+
+    for index in range(0, len(grays) - 1, step):
+        gray_a, gray_b = grays[index], grays[index + 1]
+        points = cv2.goodFeaturesToTrack(gray_a, MAX_FEATURES, 0.01, 7)
+
+        if points is None or len(points) < 40:
+            continue
+
+        moved, status, _error = cv2.calcOpticalFlowPyrLK(gray_a, gray_b, points, None, **_LK)
+        good = status.ravel() == 1
+
+        if good.sum() < 40:
+            continue
+
+        src = points[good].reshape(-1, 2)
+        shift = np.hypot(*(moved[good].reshape(-1, 2) - src).T)
+
+        for row, value in zip(src[:, 1], shift):
+            displacement.setdefault(int(row) // HOOD_PROBE_ROWS, []).append(float(value))
+
+    if not displacement:
+        return None
+
+    medians = {band_index: float(np.median(values))
+               for band_index, values in displacement.items() if len(values) >= 8}
+
+    if not medians:
+        return None
+
+    scene_motion = float(np.median(list(medians.values())))
+
+    if scene_motion < HOOD_MOVING_PX:
+        return None                      # clip is not moving; nothing to infer
+
+    hood_top = None
+    band_index = (height - 1) // HOOD_PROBE_ROWS
+
+    while band_index >= 0:
+        median = medians.get(band_index)
+
+        if median is None or median >= HOOD_STATIC_PX:
+            break
+
+        hood_top = band_index * HOOD_PROBE_ROWS
+        band_index -= 1
+
+    return hood_top
+
+
+def estimate_hop(gray_a, gray_b, band=GROUND_BAND_FALLBACK):
     """Ground-plane homography frame a -> frame b, or (None, 0.0) if untrusted."""
     mask = np.zeros_like(gray_a)
-    mask[GROUND_BAND[0]:GROUND_BAND[1], :] = 255
+    mask[band[0]:band[1], :] = 255
     points = cv2.goodFeaturesToTrack(gray_a, MAX_FEATURES, 0.01, 7, mask=mask)
 
     if points is None or len(points) < MIN_HOP_INLIERS:
@@ -186,6 +289,20 @@ def back_project(matrix, pixel):
     return float(vec[0] / vec[2]), float(vec[1] / vec[2])
 
 
+# The renderer refuses a band under 3 * ANCHOR_RESAMPLE_M of ground arclength
+# (final_preview_renderer.build_arc_ribbon_geometry); mirror that here so this
+# module's reported yield means "the renderer can draw this", not "a list exists".
+MIN_DRAWABLE_SPAN_M = 1.2
+
+
+def anchor_span_m(polyline):
+    """Ground arclength the polyline covers, from its s_m tags."""
+    if not polyline or len(polyline) < 3:
+        return 0.0
+
+    return float(polyline[-1][2]) - float(polyline[0][2])
+
+
 def pose_arclength(poses):
     """Cumulative driven metres per frame; position deltas carry no yaw bias."""
     arc = [0.0]
@@ -196,13 +313,34 @@ def pose_arclength(poses):
     return arc
 
 
+def resolve_ground_band(grays, calib):
+    """The rows to fit the ground homography on, for THIS clip's rig."""
+    band = ground_band_rows(calib)
+    hood_top = detect_hood_row(grays, band)
+
+    if hood_top is not None and hood_top > band[0] + 40:
+        band = (band[0], min(band[1], hood_top - 4))
+        print("Bonnet detected from row %d; ground band clamped to %s"
+              % (hood_top, (band,)))
+    elif hood_top is not None:
+        print("WARNING: the ego vehicle's bonnet appears to fill the ground band "
+              "(static from row %d); the homography may fit the bonnet instead of "
+              "the road." % hood_top)
+
+    print("Ground band rows: %d-%d (%.0f-%.0f m ahead)"
+          % (band[0], band[1], GROUND_BAND_FAR_M, GROUND_BAND_NEAR_M))
+
+    return band
+
+
 def anchor_track(grays, poses, fps, calib, progress=None):
     """Per-frame anchor polylines [[u, v, s_m], ...] in calibration pixels."""
     count = min(len(grays), len(poses))
+    band = resolve_ground_band(grays, calib)
     hops_1 = []
 
     for t in range(count - 1):
-        matrix, _ratio = estimate_hop(grays[t], grays[t + 1])
+        matrix, _ratio = estimate_hop(grays[t], grays[t + 1], band)
         hops_1.append(matrix)
 
         if progress and t % 200 == 0:
@@ -215,7 +353,7 @@ def anchor_track(grays, poses, fps, calib, progress=None):
         b = min(a + KEYFRAME_STRIDE, count - 1)
 
         if b - a == KEYFRAME_STRIDE:
-            matrix, _ratio = estimate_hop(grays[a], grays[b])
+            matrix, _ratio = estimate_hop(grays[a], grays[b], band)
             hops_k[m] = matrix
 
     arc = pose_arclength(poses)
@@ -375,7 +513,12 @@ def main():
     anchors, failed_spans = anchor_track(
         grays, poses, fps, calib, progress=lambda msg: print("  " + msg))
 
-    with_anchors = sum(1 for a in anchors if len(a) >= 3)
+    # Drawable, not merely present: a chain that locked onto a rigid plane
+    # emits plenty of anchors, all frozen within a pixel of the reference point.
+    # Counting those as successes is how a plane-lock masquerades as a
+    # stationary vehicle, so the yield figure is the renderer's own threshold.
+    with_anchors = sum(1 for a in anchors if anchor_span_m(a) >= MIN_DRAWABLE_SPAN_M)
+    present = sum(1 for a in anchors if len(a) >= 3)
 
     payload = {
         "type": "future_anchor_track",
@@ -399,12 +542,21 @@ def main():
     ensure_dir(os.path.dirname(args["output"]))
     write_json(args["output"], payload)
 
-    print("Future anchors: %d/%d frames usable -> %s"
+    print("Future anchors: %d/%d frames drawable -> %s"
           % (with_anchors, len(anchors), args["output"]))
 
+    if present > with_anchors * 4 and present > 20:
+        print("")
+        print("WARNING: %d frames carry anchors but only %d span enough ground "
+              "to draw. That pattern means the homographies locked onto a RIGID "
+              "plane (typically the ego vehicle's own bonnet) rather than the "
+              "road: the chain composes identity matrices, so the car reads as "
+              "stationary however fast it is moving. Check the ground band "
+              "against this clip's calibration." % (present, with_anchors))
+
     if with_anchors < len(anchors) // 2:
-        print("WARNING: fewer than half the frames have anchors; the renderer "
-              "will fall back to the direct flat-ground path for the rest.")
+        print("WARNING: fewer than half the frames have drawable anchors; the "
+              "renderer falls back to the direct flat-ground path for the rest.")
 
 
 if __name__ == "__main__":

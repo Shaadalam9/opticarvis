@@ -295,6 +295,68 @@ def test_anchor_geometry_takes_precedence():
     assert R.LAST_RIBBON_GEOMETRY is geometry
 
 
+def test_ground_band_follows_the_rig_not_the_dev_horizon():
+    """The band must name a stretch of ROAD, not a stretch of image.
+
+    Hardcoded rows silently encode one rig's horizon (row -> distance is
+    d = f*H/(v - horizon)). On a camera whose horizon sits 125 px higher those
+    same rows pointed at the ego vehicle's bonnet, RANSAC fitted the bonnet --
+    rigid with the camera, so every hop composed to identity -- and a car doing
+    39 km/h was measured as stationary. Same metres, whatever the rig.
+    """
+    dev = FA.ground_band_rows(
+        {"horizon_v": 448.0, "focal_px": FOCAL, "cam_height_m": CAM_H, "vanish_u": VANISH})
+    other = FA.ground_band_rows(
+        {"horizon_v": 322.9, "focal_px": FOCAL, "cam_height_m": CAM_H, "vanish_u": VANISH})
+
+    assert other[0] < dev[0] and other[1] < dev[1], (
+        "a higher horizon must move the band UP the image; got dev=%s other=%s"
+        % (dev, other))
+
+    # both bands must denote the same forward window in metres
+    for horizon, band in ((448.0, dev), (322.9, other)):
+        far = FOCAL * CAM_H / (band[0] - horizon)
+        near = FOCAL * CAM_H / (band[1] - horizon)
+        assert abs(far - FA.GROUND_BAND_FAR_M) < 3.0, "far edge %.1f m" % far
+        assert abs(near - FA.GROUND_BAND_NEAR_M) < 1.0, "near edge %.1f m" % near
+
+    # no calibration -> the historical constant, so a dev-rig clip is unchanged
+    assert FA.ground_band_rows(None) == FA.GROUND_BAND_FALLBACK
+
+
+def test_hood_rows_are_detected_and_excluded():
+    """A rigid bottom strip (the bonnet) must be found and cut from the band."""
+    rng = np.random.default_rng(4)
+    texture = rng.integers(0, 255, size=(720, 1280), dtype=np.uint8)
+    hood = rng.integers(0, 255, size=(180, 1280), dtype=np.uint8)
+
+    grays = []
+
+    for i in range(8):
+        frame = np.roll(texture, i * 9, axis=0).copy()   # road streams downward
+        frame[540:, :] = hood                            # bonnet never moves
+        grays.append(frame)
+
+    hood_top = FA.detect_hood_row(grays, (470, 714))
+
+    assert hood_top is not None, "a static bottom strip must be detected"
+    assert 480 <= hood_top <= 560, "bonnet top found at row %s, expected ~540" % hood_top
+
+
+def test_anchor_span_counts_drawable_frames_only():
+    """A plane-locked chain emits many anchors that span no ground at all.
+
+    Counting those as successes is exactly how the bonnet lock disguised itself
+    as a stationary vehicle, so the yield metric uses the renderer's threshold.
+    """
+    frozen = [[523.0 + 0.01 * i, 745.0, 4.5 + 0.001 * i] for i in range(200)]
+    moving = [[523.0, 745.0 - 4.0 * i, 4.5 + 0.4 * i] for i in range(40)]
+
+    assert FA.anchor_span_m(frozen) < FA.MIN_DRAWABLE_SPAN_M
+    assert FA.anchor_span_m(moving) >= FA.MIN_DRAWABLE_SPAN_M
+    assert FA.anchor_span_m([]) == 0.0
+
+
 if __name__ == "__main__":
     failures = 0
 

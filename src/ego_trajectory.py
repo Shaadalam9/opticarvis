@@ -63,7 +63,17 @@ VANISH_U = 636.0
 # +1 means a positive rotational image shift is treated as a left turn.
 YAW_SIGN = 1.0
 
-GROUND_BAND = (520, 690)
+# Metric forward window, not fixed rows. Hardcoded rows silently encode the dev
+# rig's horizon (row -> distance is d = f*H/(v - horizon)); on a rig whose
+# horizon sits elsewhere the same rows sample a different slab, and on a clip
+# with a visible bonnet they sampled the bonnet itself -- a plane rigid with the
+# camera. The odometry then fitted the bonnet and reported a car doing 23-43
+# km/h as stationary (measured on Brazzaville, D1FkMQWpMoM). Resolved per clip
+# in ground_band(), after the calibration override is applied.
+GROUND_BAND_NEAR_M = 6.0
+GROUND_BAND_FAR_M = 30.0
+GROUND_BAND_FALLBACK = (520, 690)
+GROUND_BAND = GROUND_BAND_FALLBACK
 GROUND_MIN_ROWS = 60.0
 MAX_STEP_M = 2.0
 STEP_DECAY = 0.90
@@ -104,6 +114,24 @@ def gray_frame(frame):
         )
 
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+
+def ground_band():
+    """Rows covering GROUND_BAND_NEAR_M..GROUND_BAND_FAR_M for this rig.
+
+    Kept in step with future_anchor.ground_band_rows: the anchors and the
+    arclength tags they carry must agree about which plane is the ground.
+    """
+    reach = FOCAL_PX * CAM_HEIGHT_M
+    top = int(round(HORIZON_V + reach / GROUND_BAND_FAR_M))
+    bottom = int(round(HORIZON_V + reach / GROUND_BAND_NEAR_M))
+    top = max(top, int(round(HORIZON_V)) + 4)
+    bottom = min(bottom, CALIB_REF_HEIGHT - 6)
+
+    if bottom - top < 40:
+        return GROUND_BAND_FALLBACK
+
+    return (top, bottom)
 
 
 def features(gray, y0, y1, n=400):
@@ -369,7 +397,7 @@ def apply_calibration_overrides():
     heading validation then rejects. The calibration file is shared with the
     renderer and the Alpamayo2 wrapper, so all three consumers agree.
     """
-    global VANISH_U, HORIZON_V, FOCAL_PX, CAM_HEIGHT_M
+    global VANISH_U, HORIZON_V, FOCAL_PX, CAM_HEIGHT_M, GROUND_BAND
 
     path = workflow_path("calibration", segment_tag() + "_camera_calibration.json")
 
@@ -387,6 +415,9 @@ def apply_calibration_overrides():
     CAM_HEIGHT_M = float(data.get("CAM_HEIGHT_M", CAM_HEIGHT_M))
     print("Loaded camera calibration: %s (VANISH_U %.1f, HORIZON_V %.1f)"
           % (path, VANISH_U, HORIZON_V))
+    GROUND_BAND = ground_band()
+    print("Ground band rows: %d-%d (%.0f-%.0f m ahead)"
+          % (GROUND_BAND[0], GROUND_BAND[1], GROUND_BAND_FAR_M, GROUND_BAND_NEAR_M))
 
 
 def default_output_json():

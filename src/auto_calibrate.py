@@ -61,8 +61,72 @@ HORIZON_V_BOUNDS = (CALIB_REF_HEIGHT * 0.40, CALIB_REF_HEIGHT * 0.80)
 MAX_IQR_U = 280.0
 
 
-def flow_vanishing_point(gray_a, gray_b):
-    """Least-squares intersection of one instant's flow lines, or None."""
+# Consensus gates for the per-instant intersection. Independently moving
+# vehicles produce flow lines that do not pass through the ego's focus of
+# expansion, so a plain least-squares fit over every line is dragged off the
+# true vanishing point -- and consistently enough that the outer median over
+# hundreds of instants cannot recover it (measured on a dense-traffic Nairobi
+# clip: 20 px high, 40 px right, with a 95% CI of only 4.6 px around the wrong
+# answer). Fitting only the largest consistent set of lines removes the
+# moving-object votes instead of averaging them in.
+VP_RANSAC_ITERATIONS = 200
+VP_INLIER_PX = 3.0
+VP_MIN_CONSENSUS = 8
+
+
+def _intersect_lines(normals, rhs):
+    vp, *_ = np.linalg.lstsq(normals, rhs, rcond=None)
+
+    return vp
+
+
+def consensus_vanishing_point(normals, rhs, rng):
+    """Vanishing point from the largest set of mutually consistent flow lines.
+
+    Returns None when no pair gathers VP_MIN_CONSENSUS support, which lets the
+    caller fall back rather than trust a two-line accident.
+    """
+    count = len(normals)
+
+    if count < VP_MIN_CONSENSUS:
+        return None
+
+    best_inliers = None
+    best_score = 0
+
+    for _ in range(VP_RANSAC_ITERATIONS):
+        pair = rng.choice(count, size=2, replace=False)
+        matrix = normals[pair]
+
+        if abs(float(np.linalg.det(matrix))) < 1e-6:
+            continue
+
+        try:
+            candidate = np.linalg.solve(matrix, rhs[pair])
+        except np.linalg.LinAlgError:
+            continue
+
+        # distance from the candidate to each flow line (unit normals)
+        residual = np.abs(normals @ candidate - rhs)
+        inliers = residual < VP_INLIER_PX
+        score = int(inliers.sum())
+
+        if score > best_score:
+            best_score = score
+            best_inliers = inliers
+
+    if best_inliers is None or best_score < VP_MIN_CONSENSUS:
+        return None
+
+    return _intersect_lines(normals[best_inliers], rhs[best_inliers])
+
+
+def flow_vanishing_point(gray_a, gray_b, rng=None):
+    """Intersection of one instant's flow lines, or None.
+
+    The intersection is taken over the largest consistent subset of lines; a
+    plain fit over all of them believes every moving vehicle in the scene.
+    """
     points = cv2.goodFeaturesToTrack(gray_a, 600, 0.01, 8)
 
     if points is None or len(points) < 40:
@@ -83,7 +147,14 @@ def flow_vanishing_point(gray_a, gray_b):
     direction = flow / np.hypot(flow[:, 0], flow[:, 1])[:, None]
     normals = np.stack([-direction[:, 1], direction[:, 0]], axis=1)
     rhs = (normals * p0).sum(axis=1)
-    vp, *_ = np.linalg.lstsq(normals, rhs, rcond=None)
+
+    if rng is None:
+        rng = np.random.default_rng(0)
+
+    vp = consensus_vanishing_point(normals, rhs, rng)
+
+    if vp is None:
+        vp = _intersect_lines(normals, rhs)
 
     return vp
 
