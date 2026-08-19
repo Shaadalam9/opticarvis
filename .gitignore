@@ -174,6 +174,7 @@ render_cache/
 tmp/
 temp/
 scratch/
+lpm_city_sample
 
 # Script backups
 *.bak
