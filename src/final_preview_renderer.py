@@ -442,6 +442,147 @@ DIM_LUT = np.clip(
 ).astype(np.uint8)
 
 
+
+def opticarvis_project_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def load_render_config():
+    config_path = os.environ.get(
+        "OPTICARVIS_RENDER_CONFIG",
+        os.path.join(opticarvis_project_root(), "configs", "render_default.json"),
+    )
+
+    if not os.path.isfile(config_path):
+        print("Render config not found, using renderer defaults:", config_path)
+        return {
+            "render_config_path": config_path,
+            "render_config_loaded": False,
+        }
+
+    with open(config_path, "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+
+    config["render_config_path"] = config_path
+    config["render_config_loaded"] = True
+
+    return config
+
+
+def apply_render_config_to_globals(render_config):
+    """Apply BO render parameters to existing renderer constants where present."""
+
+    float_mapping = {
+        "target_mask_alpha": [
+            "TARGET_MASK_ALPHA",
+            "HIGHLIGHT_FILL_ALPHA",
+            "MASK_ALPHA",
+            "PERSON_MASK_ALPHA",
+        ],
+        "background_dim_alpha": [
+            "BACKGROUND_DIM_ALPHA",
+            "BACKGROUND_ALPHA",
+            "DIM_ALPHA",
+        ],
+        "trajectory_ribbon_alpha": [
+            "TRAJECTORY_RIBBON_ALPHA",
+            "RIBBON_ALPHA",
+            "PATH_ALPHA",
+        ],
+        "trajectory_ribbon_width_scale": [
+            "TRAJECTORY_RIBBON_WIDTH_SCALE",
+            "RIBBON_WIDTH_SCALE",
+            "PATH_WIDTH_SCALE",
+        ],
+        "label_font_scale": [
+            "LABEL_FONT_SCALE",
+            "FONT_SCALE",
+            "TEXT_SCALE",
+        ],
+    }
+
+    int_mapping = {
+        "target_contour_thickness": [
+            "TARGET_CONTOUR_THICKNESS",
+            "CONTOUR_THICKNESS",
+            "MASK_CONTOUR_THICKNESS",
+        ],
+    }
+
+    bool_mapping = {
+        "target_mask_visible": [
+            "TARGET_MASK_VISIBLE",
+            "HIGHLIGHT_MASK_VISIBLE",
+        ],
+        "target_contour_visible": [
+            "TARGET_CONTOUR_VISIBLE",
+            "CONTOUR_VISIBLE",
+        ],
+        "background_dim_visible": [
+            "BACKGROUND_DIM_VISIBLE",
+        ],
+        "trajectory_ribbon_visible": [
+            "TRAJECTORY_RIBBON_VISIBLE",
+            "RIBBON_VISIBLE",
+            "PATH_VISIBLE",
+        ],
+        "label_visible": [
+            "LABEL_VISIBLE",
+            "TEXT_LABEL_VISIBLE",
+        ],
+    }
+
+    applied = {}
+
+    for key, names in float_mapping.items():
+        if key not in render_config:
+            continue
+
+        value = float(render_config[key])
+
+        for name in names:
+            if name in globals():
+                globals()[name] = value
+                applied[name] = value
+
+    for key, names in int_mapping.items():
+        if key not in render_config:
+            continue
+
+        value = int(render_config[key])
+
+        for name in names:
+            if name in globals():
+                globals()[name] = value
+                applied[name] = value
+
+    for key, names in bool_mapping.items():
+        if key not in render_config:
+            continue
+
+        value = bool(render_config[key])
+
+        for name in names:
+            if name in globals():
+                globals()[name] = value
+                applied[name] = value
+
+    if "palette_id" in render_config:
+        globals()["OPTICARVIS_RENDER_PALETTE_ID"] = str(render_config["palette_id"])
+        applied["OPTICARVIS_RENDER_PALETTE_ID"] = str(render_config["palette_id"])
+
+    print()
+    print("Render config")
+    print("=============")
+    print("loaded:", render_config.get("render_config_loaded", False))
+    print("path:", render_config.get("render_config_path", ""))
+    print("config_id:", render_config.get("render_config_id", ""))
+    print("applied_constants:", applied)
+
+    return applied
+
+
+
 def apply_calibration_overrides():
     """Override the camera scalars from the per-clip calibration JSON, if any."""
     if not os.path.isfile(CALIBRATION_JSON):
@@ -3526,7 +3667,14 @@ def main():
 
     effect_plan = read_json(EFFECT_PLAN_JSON)
 
+    render_config = load_render_config()
+    applied_render_config = apply_render_config_to_globals(render_config)
+
     render_summary = render_video(effect_plan, vo_track=load_vo_track_for_job())
+
+    if isinstance(render_summary, dict):
+        render_summary["render_config"] = render_config
+        render_summary["applied_render_config"] = applied_render_config
     update_workflow_state(render_summary)
 
     print_summary(effect_plan, render_summary)
