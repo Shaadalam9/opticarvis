@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oom-free-alpamayo"
+version = "0.1.0"
+description = "Memory-efficient inference for NVIDIA Alpamayo-R1 Vision-Language-Action model on resource-constrained GPU platforms"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Seungwoo Roh", email = "shtmddn49@kookmin.ac.kr" },
+]
+keywords = [
+    "vision-language-action",
+    "vla",
+    "autonomous-driving",
+    "alpamayo",
+    "memory-optimization",
+    "gpu-inference",
+    "demand-layering",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0",
+    "psutil>=5.9",
+    "colorlog>=6.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/aveeslab/oom-free-alpamayo"
+Repository = "https://github.com/aveeslab/oom-free-alpamayo"
+Issues = "https://github.com/aveeslab/oom-free-alpamayo/issues"
+
+# Note: Alpamayo-R1 itself (the model package and weights) must be installed
+# separately from NVIDIA's official channel — see README. This project does
+# not redistribute Alpamayo source or weights.
+
+[tool.setuptools.packages.find]
+include = ["alpamayo_memopt*"]
+exclude = ["scripts*", "tests*"]

@@ -18,7 +18,7 @@ def get_gemma4(model_id, local_files_only):
 
     if key not in _CACHE:
         import torch
-        from transformers import AutoModelForImageTextToText, AutoProcessor
+        from transformers import AutoModelForMultimodalLM, AutoProcessor
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         # local_files_only avoids slow/hanging Hub metadata calls; the weights
@@ -29,7 +29,7 @@ def get_gemma4(model_id, local_files_only):
             padding_side="left",
             local_files_only=local_files_only,
         )
-        model = AutoModelForImageTextToText.from_pretrained(
+        model = AutoModelForMultimodalLM.from_pretrained(
             model_id,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,

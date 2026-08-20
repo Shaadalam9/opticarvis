@@ -1,0 +1,184 @@
+sample type=<class 'dict'>
+sample keys=['data', 'messages']
+  data type=<class 'dict'>
+  data keys=['image_frames', 'camera_indices', 'ego_history_xyz', 'ego_history_rot', 'ego_future_xyz', 'ego_future_rot', 'relative_timestamps', 'absolute_timestamps', 't0_us', 'clip_id']
+    image_frames type=<class 'torch.Tensor'>
+    image_frames shape=torch.Size([4, 4, 3, 1080, 1920])
+    image_frames value=tensor([[[[[ 35,  29,  28,  ...,  97,  97,  97],
+           [ 34,  29,  28,  ...,  97,  97,  97],
+           [ 34,  29,  28,  ...,  97,  97,  97],
+           ...,
+           [ 59,  57,  57,  ...,  35,  34,  33],
+           [ 59,  59,  57,  ...,  34,  33,  32],
+           [ 59,  59,  59,  ...,  34,  32,  32]],
+
+          [[ 42,  36,  35,  ..., 118, 118, 118],
+           [ 41,  36,  35,  ..., 118, 118, 118],
+           [ 41,  36,  35,  ..., 118, 118, 118],
+           ...,
+           [ 66,  64,  64
+    camera_indices type=<class 'torch.Tensor'>
+    camera_indices shape=torch.Size([4])
+    camera_indices value=tensor([0, 1, 2, 6])
+    ego_history_xyz type=<class 'torch.Tensor'>
+    ego_history_xyz shape=torch.Size([1, 1, 16, 3])
+    ego_history_xyz value=tensor([[[[-1.3570e+01,  6.1380e-02, -2.1795e-02],
+          [-1.2617e+01,  5.5023e-02, -2.1486e-02],
+          [-1.1672e+01,  4.9834e-02, -1.9761e-02],
+          [-1.0734e+01,  4.4695e-02, -1.8918e-02],
+          [-9.8024e+00,  3.9981e-02, -1.9593e-02],
+          [-8.8790e+00,  3.4502e-02, -1.6825e-02],
+          [-7.9635e+00,  3.0071e-02, -1.1910e-02],
+          [-7.0550e+00,  2.5193e-02, -8.3880e-03],
+          [-6.1544e+00,  2.0703e-02, -3.8120e-03],
+          [-5.2613e+00,  1.6889e-02,  7.0
+    ego_history_rot type=<class 'torch.Tensor'>
+    ego_history_rot shape=torch.Size([1, 1, 16, 3, 3])
+    ego_history_rot value=tensor([[[[[ 9.9999e-01,  5.2665e-03, -2.3110e-04],
+           [-5.2647e-03,  9.9996e-01,  7.3131e-03],
+           [ 2.6960e-04, -7.3118e-03,  9.9997e-01]],
+
+          [[ 9.9999e-01,  4.9393e-03,  2.5358e-04],
+           [-4.9411e-03,  9.9996e-01,  7.4963e-03],
+           [-2.1654e-04, -7.4975e-03,  9.9997e-01]],
+
+          [[ 9.9999e-01,  4.7893e-03,  6.0320e-04],
+           [-4.7933e-03,  9.9996e-01,  6.8642e-03],
+           [-5.7030e-04, -6.8670e-03,  9.9998e-01]],
+
+          [[ 9.9999e-01,  
+    ego_future_xyz type=<class 'torch.Tensor'>
+    ego_future_xyz shape=torch.Size([1, 1, 64, 3])
+    ego_future_xyz value=tensor([[[[ 8.6272e-01,  2.9686e-05,  2.2255e-03],
+          [ 1.7226e+00,  7.1775e-04,  2.1434e-03],
+          [ 2.5798e+00,  1.0033e-03, -4.5531e-04],
+          [ 3.4335e+00,  2.9727e-03, -1.0005e-03],
+          [ 4.2832e+00,  6.7112e-03,  8.9266e-04],
+          [ 5.1293e+00,  9.7551e-03,  2.9191e-03],
+          [ 5.9713e+00,  1.4888e-02,  5.7019e-03],
+          [ 6.8098e+00,  2.1354e-02,  8.4549e-03],
+          [ 7.6453e+00,  2.8222e-02,  8.4609e-03],
+          [ 8.4774e+00,  3.6344e-02,  8.0
+    ego_future_rot type=<class 'torch.Tensor'>
+    ego_future_rot shape=torch.Size([1, 1, 64, 3, 3])
+    ego_future_rot value=tensor([[[[[ 1.0000e+00, -6.4068e-04,  9.0090e-04],
+           [ 6.3919e-04,  1.0000e+00,  1.6532e-03],
+           [-9.0196e-04, -1.6526e-03,  1.0000e+00]],
+
+          [[ 1.0000e+00, -1.5023e-03,  1.8406e-03],
+           [ 1.4995e-03,  1.0000e+00,  1.5484e-03],
+           [-1.8429e-03, -1.5456e-03,  1.0000e+00]],
+
+          [[ 1.0000e+00, -3.0048e-03,  8.4601e-04],
+           [ 3.0039e-03,  9.9999e-01,  1.0407e-03],
+           [-8.4913e-04, -1.0381e-03,  1.0000e+00]],
+
+          [[ 9.9999e-01, -
+    relative_timestamps type=<class 'torch.Tensor'>
+    relative_timestamps shape=torch.Size([4, 4])
+    relative_timestamps value=tensor([[2.7302e-02, 1.2729e-01, 2.2729e-01, 3.2728e-01],
+        [3.8000e-05, 1.0003e-01, 2.0002e-01, 3.0003e-01],
+        [2.7358e-02, 1.2735e-01, 2.2734e-01, 3.2734e-01],
+        [0.0000e+00, 9.9993e-02, 1.9998e-01, 2.9998e-01]])
+    absolute_timestamps type=<class 'torch.Tensor'>
+    absolute_timestamps shape=torch.Size([4, 4])
+    absolute_timestamps value=tensor([[4794659, 4894651, 4994644, 5094636],
+        [4767395, 4867389, 4967377, 5067388],
+        [4794715, 4894708, 4994700, 5094692],
+        [4767357, 4867350, 4967342, 5067335]])
+    t0_us type=<class 'int'>
+    t0_us value=5100000
+    clip_id type=<class 'str'>
+    clip_id value=030c760c-ae38-49aa-9ad8-f5650a545d26
+  messages type=<class 'list'>
+  messages len=3
+    messages_0 type=<class 'dict'>
+    messages_0 keys=['role', 'content']
+      role type=<class 'str'>
+      role value=system
+      content type=<class 'list'>
+      content len=1
+        content_0 type=<class 'dict'>
+        content_0 keys=['type', 'text']
+          type type=<class 'str'>
+          type value=text
+          text type=<class 'str'>
+          text value=You are a driving assistant that generates safe and accurate actions.
+    messages_1 type=<class 'dict'>
+    messages_1 keys=['role', 'content']
+      role type=<class 'str'>
+      role value=user
+      content type=<class 'list'>
+      content len=17
+        content_0 type=<class 'dict'>
+        content_0 keys=['type', 'image']
+          type type=<class 'str'>
+          type value=image
+          image type=<class 'torch.Tensor'>
+          image shape=torch.Size([3, 1080, 1920])
+          image value=tensor([[[ 35,  29,  28,  ...,  97,  97,  97],
+         [ 34,  29,  28,  ...,  97,  97,  97],
+         [ 34,  29,  28,  ...,  97,  97,  97],
+         ...,
+         [ 59,  57,  57,  ...,  35,  34,  33],
+         [ 59,  59,  57,  ...,  34,  33,  32],
+         [ 59,  59,  59,  ...,  34,  32,  32]],
+
+        [[ 42,  36,  35,  ..., 118, 118, 118],
+         [ 41,  36,  35,  ..., 118, 118, 118],
+         [ 41,  36,  35,  ..., 118, 118, 118],
+         ...,
+         [ 66,  64,  64,  ...,  42,  41,  40],
+
+        content_1 type=<class 'dict'>
+        content_1 keys=['type', 'image']
+          type type=<class 'str'>
+          type value=image
+          image type=<class 'torch.Tensor'>
+          image shape=torch.Size([3, 1080, 1920])
+          image value=tensor([[[ 25,  25,  23,  ...,  94,  94,  94],
+         [ 25,  25,  23,  ...,  94,  94,  94],
+         [ 23,  23,  22,  ...,  94,  94,  94],
+         ...,
+         [ 56,  56,  56,  ...,  33,  32,  30],
+         [ 56,  56,  56,  ...,  32,  30,  29],
+         [ 56,  56,  56,  ...,  32,  29,  29]],
+
+        [[ 29,  29,  27,  ..., 115, 115, 115],
+         [ 29,  29,  27,  ..., 115, 115, 115],
+         [ 27,  27,  26,  ..., 115, 115, 115],
+         ...,
+         [ 63,  63,  63,  ...,  38,  37,  35],
+
+        content_2 type=<class 'dict'>
+        content_2 keys=['type', 'image']
+          type type=<class 'str'>
+          type value=image
+          image type=<class 'torch.Tensor'>
+          image shape=torch.Size([3, 1080, 1920])
+          image value=tensor([[[ 25,  25,  25,  ...,  92,  92,  92],
+         [ 25,  24,  25,  ...,  92,  92,  92],
+         [ 25,  25,  25,  ...,  92,  92,  92],
+         ...,
+         [ 55,  55,  55,  ...,  35,  35,  34],
+         [ 55,  55,  55,  ...,  35,  34,  34],
+         [ 55,  55,  55,  ...,  34,  34,  34]],
+
+        [[ 26,  26,  27,  ..., 113, 113, 113],
+         [ 26,  25,  27,  ..., 113, 113, 113],
+         [ 26,  26,  27,  ..., 113, 113, 113],
+         ...,
+         [ 62,  62,  62,  ...,  40,  40,  39],
+
+    messages_2 type=<class 'dict'>
+    messages_2 keys=['role', 'content']
+      role type=<class 'str'>
+      role value=assistant
+      content type=<class 'list'>
+      content len=1
+        content_0 type=<class 'dict'>
+        content_0 keys=['type', 'text']
+          type type=<class 'str'>
+          type value=text
+          text type=<class 'str'>
+          text value=<|cot_start|>

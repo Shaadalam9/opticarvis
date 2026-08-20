@@ -1,0 +1,41 @@
+[project]
+name = "alpamayo_r1"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+  "colorlog>=6.0.0",
+  "einops>=0.8.1",
+  "hydra-core>=1.3.2",
+  "physical_ai_av>=0.2.0",
+  "pillow>=12.0.0",
+  "torch==2.8.0",
+  "torchvision>=0.23.0",
+  "transformers==4.57.1",
+  # flash-attn removed: no prebuilt Windows wheels and not needed at runtime
+  # (model is loaded with attn_implementation="sdpa" instead).
+  "scipy",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alpamayo_r1"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/pyproject.toml", "/src"]
+
+[dependency-groups]
+dev = [
+  "matplotlib>=3.10.7",
+  "mediapy>=1.2.4",
+  "ipykernel>=6.29.3",
+  "ipywidgets>=8.1.8",
+]
+
+[tool.uv]
+no-build-isolation-package = ["flash-attn"]
+
+[tool.ruff]
+line-length = 100

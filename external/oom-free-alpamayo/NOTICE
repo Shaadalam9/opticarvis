@@ -1,0 +1,28 @@
+oom-free-alpamayo
+Copyright (c) 2026 AVEES Lab, Kookmin University
+
+This project provides a memory-efficient inference framework for the
+NVIDIA Alpamayo-R1 Vision-Language-Action model on resource-constrained
+GPU platforms.
+
+================================================================================
+Third-Party Components
+================================================================================
+
+This project depends on, but does not redistribute, the following components:
+
+1. NVIDIA Alpamayo-R1 (source code)
+   - Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES
+   - License: Apache License 2.0
+   - Original repository: (NVIDIA NVlabs)
+   - This framework requires the user to install Alpamayo-R1 separately.
+
+2. NVIDIA Alpamayo-R1-10B (model weights)
+   - Subject to NVIDIA's model license terms (separate from the Apache 2.0
+     source code license).
+   - Users must obtain the weights from official NVIDIA channels and comply
+     with the applicable NVIDIA model license.
+
+The MIT License of this repository applies only to the original code authored
+by AVEES Lab. Components installed as dependencies retain their respective
+licenses.

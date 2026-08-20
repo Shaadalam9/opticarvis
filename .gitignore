@@ -145,8 +145,7 @@ master_clip_index.jsonl
 alpamayo_manifest_*.csv
 
 # External repositories
-# These are cloned locally by the user and should not be pushed as vendored source.
-external/
+
 
 # Model weights and ML artefacts
 *.pt

@@ -1,0 +1,2 @@
+video_id,segment_start_time_s,frame_count,frame_local,when_start_local_s,when_end_local_s,reasoning_trace,meta_action,confidence_score,uncertainty_score,ambiguity_score,trajectory_conflict_score,explanation_needed,explanation_reason,model_source,answer
+benchmark_sample,0.0,,,0.0,3.0,Nudge to the left to increase clearance from the construction cones on the right.,nudge,0.7,0.5,0.55,0.7,1,trajectory adjustment for clearance,oom_free_alpamayo_r1,

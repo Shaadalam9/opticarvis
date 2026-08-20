@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+dist/
+*.egg
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Experiment outputs
+results/
+logs/
+*.log
+*.pkl
+*.npz
+checkpoints/
+
+# Model weights (must not be committed)
+*.bin
+*.safetensors
+*.pth
+*.pt
+*.ckpt
+
+# Local config
+.env.local
+config.local.*

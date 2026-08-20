@@ -1,0 +1,23 @@
+Alpamayo output summary
+=======================
+
+result_type: <class 'tuple'>
+result_length: 3
+  result_0_type: <class 'torch.Tensor'>
+  result_0_shape: (1, 1, 1, 64, 3)
+  result_0_dtype: torch.float32
+  result_0_device: cuda:0
+  result_0_preview: [0.8629084825515747, -4.752954191644676e-05, 0.0, 1.723069429397583, -1.8259495845995843e-05, 0.0, 2.5800962448120117, 0.0002809240249916911, 0.0, 3.43377685546875]
+  result_1_type: <class 'torch.Tensor'>
+  result_1_shape: (1, 1, 1, 64, 3, 3)
+  result_1_dtype: torch.float32
+  result_1_device: cuda:0
+  result_1_preview: [1.0, 0.00011031721078325063, 0.0, -0.00011031721078325063, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+  result_2_type: <class 'dict'>
+  result_2_keys: ['cot', 'meta_action', 'answer']
+    cot_type: <class 'numpy.ndarray'>
+    cot_value: [[['Nudge to the left to increase clearance from the construction cones on the right.']]]
+    meta_action_type: <class 'numpy.ndarray'>
+    meta_action_value: [[['']]]
+    answer_type: <class 'numpy.ndarray'>
+    answer_value: [[['']]]

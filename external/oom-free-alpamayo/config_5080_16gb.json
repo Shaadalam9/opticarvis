@@ -1,0 +1,57 @@
+{
+  "system": {
+    "gpu_name": "NVIDIA GeForce RTX 5080",
+    "vram_total_gb": 15.92047119140625,
+    "vram_budget_gb": 14.92047119140625,
+    "cpu_dram_total_gb": 63.76757049560547
+  },
+  "model": {
+    "name": "Alpamayo-R1-10B",
+    "weights_total_gb": 0.0,
+    "vlm_layers": 36,
+    "vlm_layer_size_mb": 368.01611328125
+  },
+  "profiling": {
+    "vlm_layer_dma_ms": 15.215395075784093,
+    "vlm_layer_exe_ms": 1.716523556245698,
+    "vit_layer_dma_ms": 0.0,
+    "vit_layer_exe_ms": 0.0,
+    "non_vlm_overhead_gb": 6.805814266204834
+  },
+  "residency": {
+    "max_possible": 22,
+    "num_resident": 20,
+    "resident_indices": [
+      0,
+      1,
+      3,
+      5,
+      7,
+      8,
+      10,
+      12,
+      14,
+      15,
+      17,
+      19,
+      21,
+      22,
+      24,
+      26,
+      28,
+      29,
+      31,
+      33
+    ],
+    "placement_rule": "interleaved (paper Eq. interleaved_placement)"
+  },
+  "predicted_performance": {
+    "inference_time_s": 6.381066861814876,
+    "vit_resident": false,
+    "expert_resident": false
+  },
+  "_meta": {
+    "alpamayo_memopt_version": "0.1.0",
+    "created_at": "2026-06-15T18:59:39.473198+00:00"
+  }
+}
