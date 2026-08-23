@@ -79,77 +79,222 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger(__name__)
 
 
-CLIP_JOBS_JSONL = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_CLIP_JOBS",
+def load_root_config():
+    config_path = os.path.join(PROJECT_ROOT, "config")
+
+    if not os.path.isfile(config_path):
+        return {}
+
+    with open(config_path, "r", encoding="utf-8-sig") as handle:
+        data = json.load(handle)
+
+    if isinstance(data, dict):
+        return data
+
+    return {}
+
+
+CONFIGS = load_root_config()
+
+
+def config_value(key, default):
+    if isinstance(key, (list, tuple)):
+        for item in key:
+            if item in CONFIGS and CONFIGS[item] is not None:
+                return CONFIGS[item]
+
+        return default
+
+    if key in CONFIGS and CONFIGS[key] is not None:
+        return CONFIGS[key]
+
+    return default
+
+
+def config_text_value(key, default=""):
+    value = config_value(key, default)
+
+    if value is None:
+        return default
+
+    text_value = str(value).strip()
+
+    if not text_value:
+        return default
+
+    return text_value
+
+
+def config_bool_value(key, default=False):
+    value = config_value(key, default)
+
+    if value is None:
+        return bool(default)
+
+    if isinstance(value, bool):
+        return value
+
+    text_value = str(value).strip().lower()
+
+    if text_value in ["1", "true", "yes", "y", "on"]:
+        return True
+
+    if text_value in ["0", "false", "no", "n", "off"]:
+        return False
+
+    return bool(default)
+
+
+def config_int_value(key, default=0):
+    value = config_value(key, default)
+
+    try:
+        return int(float(value))
+    except Exception:
+        return int(default)
+
+
+def config_float_value(key, default=0.0):
+    value = config_value(key, default)
+
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def config_list_value(key, default):
+    value = config_value(key, default)
+
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    text_value = str(value or "").strip()
+
+    if not text_value:
+        return list(default)
+
+    try:
+        parsed = json.loads(text_value)
+
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+
+    return [item.strip() for item in text_value.split(",") if item.strip()]
+
+
+def as_project_path(path_value):
+    """Resolve relative config paths from the main opticarvis folder."""
+    if not path_value:
+        return path_value
+
+    path_text = str(path_value).strip()
+
+    if os.path.isabs(path_text):
+        return normalise_path(path_text)
+
+    return normalise_path(os.path.join(PROJECT_ROOT, path_text))
+
+
+_WORKFLOW_OUTPUTS_DEFAULT = WORKFLOW_OUTPUTS
+_ALPAMAYO_OUTPUTS_DEFAULT = ALPAMAYO_OUTPUTS
+_ALPAMAYO_JSON_DIR_DEFAULT = ALPAMAYO_JSON_DIR
+_VIDEOS_DIR_DEFAULT = VIDEOS_DIR
+_OOM_FREE_ALPAMAYO_REPO_DEFAULT = OOM_FREE_ALPAMAYO_REPO
+
+WORKFLOW_OUTPUTS = as_project_path(
+    config_text_value(["workflow_outputs", "WORKFLOW_OUTPUTS"], _WORKFLOW_OUTPUTS_DEFAULT)
+)
+
+ALPAMAYO_OUTPUTS = as_project_path(
+    config_text_value(["alpamayo_outputs", "ALPAMAYO_OUTPUTS"], _ALPAMAYO_OUTPUTS_DEFAULT)
+)
+
+ALPAMAYO_JSON_DIR = as_project_path(
+    config_text_value(
+        ["alpamayo_json_dir", "ALPAMAYO_JSON_DIR"],
+        os.path.join(ALPAMAYO_OUTPUTS, "alpamayo_json"),
+    )
+)
+
+SOURCE_VIDEO_DIR = as_project_path(
+    config_text_value(["videos", "SOURCE_VIDEO_DIR"], _VIDEOS_DIR_DEFAULT)
+)
+
+CLIP_JOBS_JSONL = as_project_path(
+    config_text_value(
+        ["clip_jobs_jsonl", "CLIP_JOBS_JSONL"],
         os.path.join(WORKFLOW_OUTPUTS, "clip_jobs.jsonl"),
     )
 )
 
-MASTER_INDEX_JSONL = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_MASTER_CLIP_INDEX",
+MASTER_INDEX_JSONL = as_project_path(
+    config_text_value(
+        ["master_clip_index_jsonl", "MASTER_CLIP_INDEX_JSONL"],
         os.path.join(WORKFLOW_OUTPUTS, "master_clip_index.jsonl"),
     )
 )
 
-PIPELINE_SCRIPT = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_SINGLE_PIPELINE",
+PIPELINE_SCRIPT = as_project_path(
+    config_text_value(
+        ["single_pipeline_script", "SINGLE_PIPELINE_SCRIPT", "PIPELINE_SCRIPT"],
         os.path.join(SRC_DIR, "run_corrected_pipeline.py"),
     )
 )
 
-OOM_ALPAMAYO_REPO = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_OOM_FREE_ALPAMAYO_REPO",
-        os.environ.get("OPTICARVIS_ALPAMAYO_REPO", OOM_FREE_ALPAMAYO_REPO),
+OOM_ALPAMAYO_REPO = as_project_path(
+    config_text_value(
+        ["OOM_FREE_ALPAMAYO_REPO", "ALPAMAYO_REPO"],
+        _OOM_FREE_ALPAMAYO_REPO_DEFAULT,
     )
 )
 
-ALPAMAYO_SCRIPT = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_ALPAMAYO_SCRIPT",
+ALPAMAYO_SCRIPT = as_project_path(
+    config_text_value(
+        ["ALPAMAYO_SCRIPT", "alpamayo_script"],
         os.path.join(OOM_ALPAMAYO_REPO, "scripts", "infer_crowd_clip.py"),
     )
 )
 
-ALPAMAYO_CONFIG = os.environ.get("OPTICARVIS_ALPAMAYO_CONFIG", "config_5080_16gb.json")
+ALPAMAYO_CONFIG = config_text_value("ALPAMAYO_CONFIG", "config_5080_16gb.json")
 
-EXTRACT_CLIPS = os.environ.get("OPTICARVIS_EXTRACT_CLIPS", "1") == "1"
-RUN_ALPAMAYO = os.environ.get("OPTICARVIS_RUN_ALPAMAYO", "1") == "1"
-SKIP_EXISTING_STATE = os.environ.get("OPTICARVIS_SKIP_EXISTING_STATE", "0") == "1"
+EXTRACT_CLIPS = config_bool_value("EXTRACT_CLIPS", True)
+RUN_ALPAMAYO = config_bool_value("RUN_ALPAMAYO", True)
+SKIP_EXISTING_STATE = config_bool_value("SKIP_EXISTING_STATE", False)
 
 # Default off: a 100 city batch should record a failed clip and carry on. Set it
-# while debugging a single job, when the first traceback is the thing you want.
-STOP_ON_JOB_FAILURE = os.environ.get("OPTICARVIS_STOP_ON_JOB_FAILURE", "0") == "1"
+# in config while debugging a single job, when the first traceback is the thing
+# you want.
+STOP_ON_JOB_FAILURE = config_bool_value("STOP_ON_JOB_FAILURE", False)
 
 # Failure isolation cuts the other way when the cause is systemic -- a broken
 # venv fails every job identically, two minutes at a time. A run of consecutive
 # failures with nothing succeeding in between is that signature, so the batch
 # stops there. 0 disables the guard.
-MAX_CONSECUTIVE_FAILURES = int(
-    os.environ.get("OPTICARVIS_MAX_CONSECUTIVE_FAILURES", "5")
-)
+MAX_CONSECUTIVE_FAILURES = config_int_value("MAX_CONSECUTIVE_FAILURES", 5)
 
 # Decide the Gemma gate for a whole round in one process (gemma_gate_batch.py)
-# instead of paying the full model load inside every per-job pipeline. 0 falls
-# back to the per-job gate.
-GATE_BATCH = os.environ.get("OPTICARVIS_GATE_BATCH", "1") == "1"
+# instead of paying the full model load inside every per-job pipeline. False
+# falls back to the per-job gate.
+GATE_BATCH = config_bool_value("GATE_BATCH", True)
 
 # Replace each rendered mp4v master with an H.264 encode of itself, same
 # filename, so the state's output paths stay valid. The batch render path never
 # transcoded; only the manual render_timeline_clip.py did.
-BATCH_H264 = os.environ.get("OPTICARVIS_BATCH_H264", "1") == "1"
+BATCH_H264 = config_bool_value("BATCH_H264", True)
 
 # Estimate each clip's vanishing point/horizon before the planner sees it
-# (src/auto_calibrate.py). The defaults belong to the original dev rig; on the
-# 100 different dashcams of mapping.csv they bias the planner's ego history,
-# the VO track and the ribbon projection -- one wrong constant, three symptoms.
-AUTO_CALIBRATE = os.environ.get("OPTICARVIS_AUTO_CALIBRATE", "1") == "1"
+# (src/auto_calibrate.py).
+AUTO_CALIBRATE = config_bool_value("AUTO_CALIBRATE", True)
 
-VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi"]
-DOWNLOAD_MISSING_SOURCE_VIDEOS = True
+VIDEO_EXTENSIONS = config_list_value("VIDEO_EXTENSIONS", [".mp4", ".mkv", ".mov", ".avi"])
+DOWNLOAD_MISSING_SOURCE_VIDEOS = config_bool_value("DOWNLOAD_MISSING_SOURCE_VIDEOS", True)
+
 
 
 def reset_ftp_video_tmp_dir():
@@ -166,37 +311,17 @@ def atomic_video_download_path(filename_with_ext):
     return final_path, tmp_path
 
 
-def config_bool(key, default=False):
-    """Read a boolean value from common.get_configs()."""
-    value = common.get_configs(key)
 
-    if value is None:
-        return default
-
-    if isinstance(value, bool):
-        return value
-
-    text_value = str(value).strip().lower()
-
-    if text_value in ["1", "true", "yes", "y", "on"]:
-        return True
-
-    if text_value in ["0", "false", "no", "n", "off"]:
-        return False
-
-    return default
-
-
-DELETE_FTP_VIDEOS_AFTER_USE = config_bool(
+DELETE_FTP_VIDEOS_AFTER_USE = config_bool_value(
     "DELETE_FTP_VIDEOS_AFTER_USE",
     False,
 )
 
-FTP_ALIASES = ["tue1", "tue2", "tue3", "tue4", "tue5"]
-FTP_CRAWL_PAGE_LIMIT = 500
-FTP_TIMEOUT_SECONDS = 20
-WHEN_START_LOCAL_S = 12.67
-WHEN_END_LOCAL_S = 15.60
+FTP_ALIASES = config_list_value("FTP_ALIASES", ["tue1", "tue2", "tue3", "tue4", "tue5"])
+FTP_CRAWL_PAGE_LIMIT = config_int_value("FTP_CRAWL_PAGE_LIMIT", 500)
+FTP_TIMEOUT_SECONDS = config_int_value("FTP_TIMEOUT_SECONDS", 20)
+WHEN_START_LOCAL_S = config_float_value("WHEN_START_LOCAL_S", 12.67)
+WHEN_END_LOCAL_S = config_float_value("WHEN_END_LOCAL_S", 15.60)
 
 SOURCE_VIDEO_CACHE = {}
 MISSING_SOURCE_VIDEO_IDS = set()
@@ -268,30 +393,9 @@ def ftp_aliases_in_preference_order():
     return list(FTP_ALIASES)
 
 
-def as_project_path(path_value):
-    """Resolve relative config paths from the main opticarvis folder."""
-    if not path_value:
-        return path_value
-
-    path_text = str(path_value)
-
-    if os.path.isabs(path_text):
-        return normalise_path(path_text)
-
-    return normalise_path(os.path.join(PROJECT_ROOT, path_text))
-
-
-configured_video_dir = common.get_configs("videos")
-
-SOURCE_VIDEO_DIR = normalise_path(
-    os.environ.get(
-        "OPTICARVIS_SOURCE_VIDEO_DIR",
-        as_project_path(configured_video_dir) if configured_video_dir else VIDEOS_DIR,
-    )
-)
 FTP_VIDEO_TMP_DIR = os.path.join(SOURCE_VIDEO_DIR, ".tmp")
 
-VIDEO_BASE_URL = common.get_configs("VIDEO_BASE_URL")
+VIDEO_BASE_URL = config_text_value("VIDEO_BASE_URL", "")
 VIDEO_USERNAME = common.get_secrets("ftp_username")
 VIDEO_PASSWORD = common.get_secrets("ftp_password")
 
@@ -668,18 +772,6 @@ def extract_clip(job):
     return True, "clip_extracted"
 
 
-def config_text_value(key, default=""):
-    value = common.get_configs(key)
-
-    if value is None:
-        return default
-
-    text_value = str(value).strip()
-
-    if not text_value:
-        return default
-
-    return text_value
 
 
 def get_alpamayo_backend():
@@ -871,7 +963,7 @@ def run_alpamayo_for_ready_jobs(jobs, start_index):
 
     if not RUN_ALPAMAYO:
         print("")
-        print("Alpamayo run disabled by OPTICARVIS_RUN_ALPAMAYO=0")
+        print("Alpamayo run disabled by config RUN_ALPAMAYO=false")
         return
 
     backend = get_alpamayo_backend()
@@ -1063,6 +1155,51 @@ def calibration_json_for(job):
     )
 
 
+
+def cleanup_rejected_candidate(job):
+    """Remove intermediate files for candidates that never reached rendering."""
+    paths = [
+        job.get("clip_video"),
+        state_json_for(job),
+        normalise_path(
+            os.path.join(
+                WORKFLOW_OUTPUTS,
+                "gemma_reasoning",
+                clip_tag(job) + "_gemma_gate.json",
+            )
+        ),
+        normalise_path(
+            os.path.join(
+                WORKFLOW_OUTPUTS,
+                "gemma_reasoning",
+                clip_tag(job) + "_gemma_prompt.json",
+            )
+        ),
+        normalise_path(
+            os.path.join(
+                WORKFLOW_OUTPUTS,
+                "alpamayo_traces",
+                clip_tag(job) + "_alpamayo_context.json",
+            )
+        ),
+    ]
+
+    for path in paths:
+        if path and os.path.isfile(path):
+            os.remove(path)
+
+    key_frame_dir = normalise_path(
+        os.path.join(
+            WORKFLOW_OUTPUTS,
+            "gemma_reasoning",
+            clip_tag(job) + "_key_frames",
+        )
+    )
+
+    if os.path.isdir(key_frame_dir):
+        shutil.rmtree(key_frame_dir)
+
+
 def run_pipeline_one_job(job, index, total, gate_decision=None):
     """Render one prepared job. gate_decision: True/False when the batched gate
     already decided (state file holds it); None to let the per-job pipeline
@@ -1084,8 +1221,10 @@ def run_pipeline_one_job(job, index, total, gate_decision=None):
     # With a batched gate, the decision already sits in the state file, so a
     # declined clip costs nothing further and an approved one skips stages 1-2.
     if gate_decision is False:
+        cleanup_rejected_candidate(job)
         elapsed = time.time() - started
-        append_master(job, "complete", "gate_declined", elapsed)
+        append_master(job, "complete", "gate_declined_cleaned", elapsed)
+        print("Rejected candidate cleaned: ", job["job_id"])
         print("No render: the explanation gate declined this clip.")
         return "gate_declined"
 
@@ -1114,7 +1253,7 @@ def run_pipeline_one_job(job, index, total, gate_decision=None):
         # history. The failure is recorded in the master index; main() reports
         # the tally and exits non zero so a caller still notices.
         if STOP_ON_JOB_FAILURE:
-            print("Stopping: OPTICARVIS_STOP_ON_JOB_FAILURE is set")
+            print("Stopping: STOP_ON_JOB_FAILURE is true in config")
             raise SystemExit(completed.returncode)
 
         return "failed"
@@ -1393,7 +1532,7 @@ def main():
 
     # How many rendered clips resolve a city. 0 keeps the old uncapped meaning:
     # never resolve early, attempt every emitted window.
-    clips_wanted = max(int(os.environ.get("OPTICARVIS_CLIPS_PER_CITY", "1")), 0)
+    clips_wanted = max(config_int_value("CLIPS_PER_CITY", 1), 0)
 
     outcomes = {"rendered": [], "gate_declined": [], "failed": [], "skipped": []}
     city_results = {}
@@ -1408,8 +1547,7 @@ def main():
         if MAX_CONSECUTIVE_FAILURES and consecutive_failures[0] >= MAX_CONSECUTIVE_FAILURES:
             print("")
             print("%d consecutive failures with no success in between -- this "
-                  "looks systemic, not per-clip. Stopping. Raise or disable "
-                  "OPTICARVIS_MAX_CONSECUTIVE_FAILURES to override."
+                  "looks systemic, not per-clip. Stopping. Raise or disable MAX_CONSECUTIVE_FAILURES in config to override."
                   % consecutive_failures[0])
             raise SystemExit(2)
 

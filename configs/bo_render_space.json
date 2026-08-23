@@ -1,18 +1,47 @@
 {
-  "target_mask_visible": {"type": "bool", "default": true},
-  "target_mask_alpha": {"type": "float", "min": 0.05, "max": 0.70, "default": 0.14},
-  "target_contour_visible": {"type": "bool", "default": true},
-  "target_contour_thickness": {"type": "int", "min": 1, "max": 6, "default": 2},
-  "background_dim_visible": {"type": "bool", "default": true},
-  "background_dim_alpha": {"type": "float", "min": 0.00, "max": 0.50, "default": 0.06},
-  "trajectory_ribbon_visible": {"type": "bool", "default": true},
-  "trajectory_ribbon_alpha": {"type": "float", "min": 0.10, "max": 0.90, "default": 0.55},
-  "trajectory_ribbon_width_scale": {"type": "float", "min": 0.50, "max": 2.00, "default": 1.00},
-  "label_visible": {"type": "bool", "default": true},
-  "label_font_scale": {"type": "float", "min": 0.50, "max": 1.60, "default": 1.00},
-  "palette_id": {
-    "type": "categorical",
-    "values": ["default", "high_contrast", "minimal_blue", "warm_attention"],
-    "default": "default"
+  "space_id": "bo_render_space_v2_compact",
+  "description": "Compact BO render space using zero-floor continuous parameters instead of separate visibility booleans.",
+  "parameters": {
+    "mask_alpha": {
+      "type": "float",
+      "min": 0.0,
+      "max": 0.7,
+      "default": 0.14,
+      "meaning": "0 hides the target mask; higher values increase target mask opacity."
+    },
+    "contour_thickness_px": {
+      "type": "int",
+      "min": 0,
+      "max": 5,
+      "default": 2,
+      "meaning": "0 hides the contour; higher values increase target boundary thickness."
+    },
+    "trajectory_alpha": {
+      "type": "float",
+      "min": 0.0,
+      "max": 1.0,
+      "default": 0.55,
+      "meaning": "0 hides the trajectory ribbon; higher values increase trajectory visibility."
+    },
+    "label_scale": {
+      "type": "float",
+      "min": 0.0,
+      "max": 1.4,
+      "default": 1.0,
+      "meaning": "0 hides labels; values above roughly 0.6 show readable labels."
+    },
+    "background_dim_alpha": {
+      "type": "float",
+      "min": 0.0,
+      "max": 0.4,
+      "default": 0.06,
+      "meaning": "0 means no dimming; higher values dim irrelevant background context."
+    },
+    "palette_id": {
+      "type": "categorical",
+      "values": [0, 1, 2, 3],
+      "default": 0,
+      "meaning": "Selects one predefined colour palette. Raw RGB is not optimised."
+    }
   }
 }

@@ -1,0 +1,34 @@
+{
+  "0": {
+    "name": "automotive_standard",
+    "target": "#FF9F1C",
+    "trajectory": "#00B4D8",
+    "label_text": "#F8F9FA",
+    "label_background": "#1F2937",
+    "highlight": "#FF9F1C"
+  },
+  "1": {
+    "name": "accessibility_okabe_ito",
+    "target": "#56B4E9",
+    "trajectory": "#009E73",
+    "label_text": "#111111",
+    "label_background": "#F0E442",
+    "highlight": "#E69F00"
+  },
+  "2": {
+    "name": "minimalist_hud",
+    "target": "#E0E0E0",
+    "trajectory": "#48CAE4",
+    "label_text": "#FFFFFF",
+    "label_background": "#222222",
+    "highlight": "#90E0EF"
+  },
+  "3": {
+    "name": "high_saliency",
+    "target": "#FF0055",
+    "trajectory": "#CCFF00",
+    "label_text": "#FFFFFF",
+    "label_background": "#000000",
+    "highlight": "#FF0055"
+  }
+}

@@ -1,15 +1,9 @@
 {
-  "render_config_id": "default",
-  "target_mask_visible": true,
-  "target_mask_alpha": 0.14,
-  "target_contour_visible": true,
-  "target_contour_thickness": 2,
-  "background_dim_visible": true,
+  "render_config_id": "default_compact_bo_v2",
+  "mask_alpha": 0.14,
+  "contour_thickness_px": 2,
+  "trajectory_alpha": 0.55,
+  "label_scale": 1.0,
   "background_dim_alpha": 0.06,
-  "trajectory_ribbon_visible": true,
-  "trajectory_ribbon_alpha": 0.55,
-  "trajectory_ribbon_width_scale": 1.0,
-  "label_visible": true,
-  "label_font_scale": 1.0,
-  "palette_id": "default"
+  "palette_id": 0
 }

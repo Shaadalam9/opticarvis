@@ -37,6 +37,85 @@ import math
 import os
 import sys
 
+
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SRC_DIR)
+
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+import common
+
+
+def opticarvis_project_root():
+    return PROJECT_ROOT
+
+
+def resolve_project_path(path_value):
+    if path_value is None:
+        return None
+
+    path_text = str(path_value).strip()
+
+    if path_text == "":
+        return None
+
+    if os.path.isabs(path_text):
+        return os.path.abspath(path_text).replace("\\", os.sep)
+
+    return os.path.abspath(os.path.join(PROJECT_ROOT, path_text)).replace("\\", os.sep)
+
+
+def config_value(key, default):
+    try:
+        configs = common.get_configs()
+        if isinstance(configs, dict) and key in configs:
+            value = configs[key]
+            if value is not None:
+                return value
+    except Exception:
+        pass
+
+    try:
+        value = common.get_configs(key)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+
+    return default
+
+
+def config_bool_value(key, default):
+    value = config_value(key, default)
+
+    if isinstance(value, bool):
+        return value
+
+    text = str(value).strip().lower()
+
+    if text in ["1", "true", "yes", "y", "on"]:
+        return True
+
+    if text in ["0", "false", "no", "n", "off"]:
+        return False
+
+    return bool(default)
+
+
+def config_float_value(key, default):
+    value = config_value(key, default)
+
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -81,7 +160,7 @@ OUTPUT_VIDEO_VEHICLES = workflow_path(
 
 # Swap via OPTICARVIS_YOLO_SEG_MODEL; see pipeline_common "Models".
 MODEL_NAME = YOLO_SEG_MODEL
-TRACKER_NAME = os.environ.get("OPTICARVIS_TRACKER", "bytetrack.yaml")
+TRACKER_NAME = str(config_value("TRACKER_NAME", "bytetrack.yaml"))
 IMAGE_SIZE = 1280
 # Low gate: the source is 720p, so most missed pedestrians are small/occluded
 # people the detector sees but scores low, not a resolution problem. 0.15 caught
@@ -229,7 +308,7 @@ USE_ROAD_AIMED_RIBBON = True
 #     explainable-AV overlay is explaining; valid near t0 (the 64 waypoints
 #     cover 6.4 s from the planned moment), which is exactly when the gate
 #     shows the overlay. Falls back to perception when no context exists.
-RIBBON_SOURCE = os.environ.get("OPTICARVIS_RIBBON_SOURCE", "perception")
+RIBBON_SOURCE = str(config_value("RIBBON_SOURCE", "perception"))
 
 # Alpamayo's ego frame is FLU: +y is LEFT. The renderer is right-positive
 # (LATERAL_SIGN, section 3a of ENGINEERING.md). Verified on Fvt6rD9tt1c_22:
@@ -237,7 +316,7 @@ RIBBON_SOURCE = os.environ.get("OPTICARVIS_RIBBON_SOURCE", "perception")
 # trajectory runs to y=+31 m, and the scene pan at t0 confirms the left curve
 # -- so +y must be left, and the raw value must be negated here. Consuming it
 # unsigned would mirror every planned turn.
-PLANNER_LATERAL_SIGN = float(os.environ.get("OPTICARVIS_PLANNER_LATERAL_SIGN", "-1"))
+PLANNER_LATERAL_SIGN = config_float_value("PLANNER_LATERAL_SIGN", -1.0)
 
 # The most recent ribbon geometry, published by resolve_frame_overlay for the
 # geometry dump. The temporal state that shapes it (lane tracker, VO offsets,
@@ -276,7 +355,7 @@ RIBBON_FAR_ROWS = 62.0
 # turn's yaw signature is barely above that noise floor, so it could not reliably
 # tell a turn from noise in the first place. ego_motion.py exists only to feed this
 # path. Prefer OPTICARVIS_VO_TRAJECTORY.
-USE_EGO_LOOKAHEAD = os.environ.get("OPTICARVIS_EGO_LOOKAHEAD", "0") == "1"
+USE_EGO_LOOKAHEAD = config_bool_value("USE_EGO_LOOKAHEAD", False)
 LOOKAHEAD_S = 3.5
 EGO_YAW_SIGN = -1.0               # maps scene pan -> ribbon direction
 EGO_YAW_GAIN = 1.3               # ribbon far-aim px per px of future scene pan
@@ -293,7 +372,7 @@ LOOKAHEAD_SMOOTH = 0.10          # EMA weight on the look-ahead offset across fr
 # intersection). Hybrid: the ribbon stays lane-centered on straights/gentle
 # curves and VO only takes over as the path bends hard, so VO's straight-road
 # noise never shows. Off by default; enable per turn-clip render.
-USE_VO_TRAJECTORY = os.environ.get("OPTICARVIS_VO_TRAJECTORY", "0") == "1"
+USE_VO_TRAJECTORY = config_bool_value("USE_VO_TRAJECTORY", False)
 VO_TURN_LAT_LO = 2.5              # m of path lateral spread below which it stays lane-centered
 # m at/above which the ribbon is fully VO-shaped Measured separation (in-window lateral, ribbon
 # rows only): straight road peaks at 2.2 m, the real curve runs 4.0-6.2 m, so this band
@@ -323,7 +402,7 @@ USE_LANE_CENTERING = True
 #   "ufldv2" - UFLDv2 lane *instances* (clean per-lane polylines; straddle-select
 #              the ego boundaries). The proper fix; runs on the main GPU.
 #   "yolop"  - YOLOP lane *mask* + the row-scan heuristic (legacy fallback).
-LANE_SOURCE = os.environ.get("OPTICARVIS_LANE_SOURCE", "ufldv2")
+LANE_SOURCE = str(config_value("LANE_SOURCE", "ufldv2"))
 LANE_CONF_FULL_TRUST = 0.25       # valid-row fraction that earns full lane trust
 LANE_CENTER_CAP_PX = 140.0        # max lane-centre offset from straight (VANISH_U)
 # Anchor tracker (alpha-beta with a velocity state, gains scaled by detection
@@ -366,7 +445,7 @@ LANE_EXTRAPOLATE_TOL_PX = 25.0
 # boundaries do not span the near field the curve decays to zero and the ribbon
 # is the straight ground line as before. Real turns remain VO's job - boundary
 # coverage collapses exactly where sharp curvature lives.
-USE_LANE_CURVE = os.environ.get("OPTICARVIS_LANE_CURVE", "1") == "1"
+USE_LANE_CURVE = config_bool_value("USE_LANE_CURVE", True)
 LANE_CURVE_MAX_K = 0.006          # |quadratic coeff| cap  ->  radius >= ~83 m
 LANE_CURVE_MAX_H = 0.15           # |heading| cap at the near anchor (rad-ish)
 # trust-scaled gain on the tracked heading/curvature. Decomposing the far-row wiggle on the turn
@@ -443,25 +522,23 @@ DIM_LUT = np.clip(
 
 
 
-def opticarvis_project_root():
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
 def load_render_config():
-    config_path = os.environ.get(
-        "OPTICARVIS_RENDER_CONFIG",
-        os.path.join(opticarvis_project_root(), "configs", "render_default.json"),
+    config_path = resolve_project_path(
+        config_value("RENDER_CONFIG", os.path.join("configs", "render_default.json"))
     )
 
-    if not os.path.isfile(config_path):
+    if not config_path or not os.path.isfile(config_path):
         print("Render config not found, using renderer defaults:", config_path)
         return {
             "render_config_path": config_path,
             "render_config_loaded": False,
         }
 
-    with open(config_path, "r", encoding="utf-8") as handle:
+    with open(config_path, "r", encoding="utf-8-sig") as handle:
         config = json.load(handle)
+
+    if not isinstance(config, dict):
+        config = {}
 
     config["render_config_path"] = config_path
     config["render_config_loaded"] = True
@@ -469,7 +546,69 @@ def load_render_config():
     return config
 
 
+
+def expand_compact_bo_render_config(render_config):
+    if not isinstance(render_config, dict):
+        return render_config
+
+    expanded = dict(render_config)
+
+    def clamp_float(value, low, high):
+        value = float(value)
+        if value < low:
+            return low
+        if value > high:
+            return high
+        return value
+
+    if (
+        "mask_alpha" in expanded
+        or "contour_thickness_px" in expanded
+        or "trajectory_alpha" in expanded
+        or "label_scale" in expanded
+        or "background_dim_alpha" in expanded
+    ):
+        mask_alpha = clamp_float(expanded.get("mask_alpha", 0.14), 0.0, 0.7)
+        contour_thickness = int(round(clamp_float(expanded.get("contour_thickness_px", 2), 0.0, 5.0)))
+        trajectory_alpha = clamp_float(expanded.get("trajectory_alpha", 0.55), 0.0, 1.0)
+        label_scale = clamp_float(expanded.get("label_scale", 1.0), 0.0, 1.4)
+        background_dim_alpha = clamp_float(expanded.get("background_dim_alpha", 0.06), 0.0, 0.4)
+
+        expanded["target_mask_visible"] = mask_alpha > 0.0
+        expanded["target_mask_alpha"] = mask_alpha
+
+        expanded["target_contour_visible"] = contour_thickness > 0
+        expanded["target_contour_thickness"] = contour_thickness
+
+        expanded["trajectory_ribbon_visible"] = trajectory_alpha > 0.0
+        expanded["trajectory_ribbon_alpha"] = trajectory_alpha
+        expanded["trajectory_ribbon_width_scale"] = expanded.get("trajectory_ribbon_width_scale", 1.0)
+
+        expanded["label_visible"] = label_scale > 0.0
+        expanded["label_font_scale"] = label_scale
+
+        expanded["background_dim_visible"] = background_dim_alpha > 0.0
+        expanded["background_dim_alpha"] = background_dim_alpha
+
+        palette_map = {
+            0: "automotive_standard",
+            1: "accessibility_okabe_ito",
+            2: "minimalist_hud",
+            3: "high_saliency"
+        }
+
+        palette_id = expanded.get("palette_id", 0)
+        if isinstance(palette_id, str) and palette_id.isdigit():
+            palette_id = int(palette_id)
+
+        if isinstance(palette_id, int):
+            expanded["palette_id"] = palette_map.get(palette_id, "automotive_standard")
+
+    return expanded
+
+
 def apply_render_config_to_globals(render_config):
+    render_config = expand_compact_bo_render_config(render_config)
     """Apply BO render parameters to existing renderer constants where present."""
 
     float_mapping = {
@@ -1854,7 +1993,7 @@ def apply_lateral_feed_forward(shift_px, lane_state, aim_state, vo_state):
 # Draw the measured future path directly (no aimed-machinery filtering)
 # whenever a validated VO track supplies it. The aimed ribbon remains the
 # fallback for clips without one.
-DIRECT_FUTURE_PATH = os.environ.get("OPTICARVIS_DIRECT_FUTURE_PATH", "1") == "1"
+DIRECT_FUTURE_PATH = config_bool_value("DIRECT_FUTURE_PATH", True)
 
 
 class FuturePathSmoother(object):
@@ -1916,7 +2055,7 @@ def direct_future_geometry(smoother, vo_pts):
 # homographies to the future frames. No world model stands between those
 # anchors and the road, so they survive exactly the moments the flat-ground
 # projection breaks: pull-away heading noise, fast yaw, folded-back turn arcs.
-USE_FUTURE_ANCHOR = os.environ.get("OPTICARVIS_FUTURE_ANCHOR", "1") == "1"
+USE_FUTURE_ANCHOR = config_bool_value("USE_FUTURE_ANCHOR", True)
 ANCHOR_GAP_BRIDGE_FRAMES = 5
 ANCHOR_RESAMPLE_M = 0.4
 ANCHOR_SMOOTH_TAPS = 5
@@ -2096,7 +2235,8 @@ def load_future_anchors_for_job():
     if not USE_FUTURE_ANCHOR:
         return None
 
-    path = os.environ.get("OPTICARVIS_FUTURE_ANCHOR_JSON") or workflow_path(
+    configured_path = config_value("FUTURE_ANCHOR_JSON", "")
+    path = resolve_project_path(configured_path) if str(configured_path).strip() else workflow_path(
         "ego_trajectory", segment_tag() + "_future_anchors.json")
 
     if not os.path.isfile(path):
@@ -2997,7 +3137,7 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     # by default -- a batch that skips it forfeits cheap restyles forever.
     dump = None
 
-    if os.environ.get("OPTICARVIS_DUMP_GEOMETRY", "1") == "1":
+    if config_bool_value("DUMP_GEOMETRY", True):
         from overlay_geometry_dump import GeometryDump
         from pipeline_common import WORKFLOW_OUTPUTS
 
@@ -3383,7 +3523,7 @@ def render_video(effect_plan, vo_track=None):
 
     dump = None
 
-    if os.environ.get("OPTICARVIS_DUMP_GEOMETRY", "1") == "1":
+    if config_bool_value("DUMP_GEOMETRY", True):
         from overlay_geometry_dump import GeometryDump
         from pipeline_common import WORKFLOW_OUTPUTS
 

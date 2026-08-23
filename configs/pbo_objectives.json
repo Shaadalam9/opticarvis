@@ -1,0 +1,33 @@
+{
+  "study_id": "pbo_objectives_v1",
+  "rating_mode": "pairwise_preference",
+  "response_scale": [
+    "strongly_prefer_a",
+    "slightly_prefer_a",
+    "neutral",
+    "slightly_prefer_b",
+    "strongly_prefer_b"
+  ],
+  "objectives": [
+    {
+      "name": "clarity_understanding",
+      "direction": "maximize",
+      "pairwise_question": "Which explanation made it easier to understand why the vehicle behaved this way?"
+    },
+    {
+      "name": "perceived_safety",
+      "direction": "maximize",
+      "pairwise_question": "Which explanation made the vehicle behaviour feel safer?"
+    },
+    {
+      "name": "mental_load_distraction",
+      "direction": "minimize",
+      "pairwise_question": "Which explanation was easier to process and less distracting?"
+    }
+  ],
+  "experimental_condition": {
+    "name": "traffic_context_familiarity",
+    "levels": ["familiar_or_regional", "unfamiliar_or_random"],
+    "note": "This is an experimental condition, not a BO objective."
+  }
+}
