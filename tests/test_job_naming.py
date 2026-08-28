@@ -560,6 +560,25 @@ def test_windows_per_city_emits_ordered_candidates():
             )
 
 
+def test_mapping_start_and_end_lists_are_paired_per_video():
+    builder = reload_with_env("clip_job_builder", {})
+    row = {
+        "videos": "[videoA1,videoB2]",
+        "start_time": "[[40,100],[200]]",
+        "end_time": "[[80,150],[260]]",
+    }
+    video_ids = builder.parse_video_ids(row)
+    intervals = builder.parse_intervals_for_row(row, video_ids)
+
+    assert intervals == {
+        "videoA1": [
+            {"start_s": 40.0, "end_s": 80.0},
+            {"start_s": 100.0, "end_s": 150.0},
+        ],
+        "videoB2": [{"start_s": 200.0, "end_s": 260.0}],
+    }
+
+
 def test_windows_default_matches_clips_cap():
     """Without OPTICARVIS_WINDOWS_PER_CITY nothing changes: one job per city."""
     for city_jobs in build_jobs(clips_per_city=1):

@@ -232,6 +232,10 @@ CONTINENT = env_text("OPTICARVIS_CONTINENT", "unknown")
 H264_CRF = int(env_float("OPTICARVIS_H264_CRF", 20))
 
 GEMMA4_MODEL = env_text("OPTICARVIS_GEMMA4_MODEL", "google/gemma-4-E2B-it")
+CANDIDATE_SEMANTIC_MODEL = env_text(
+    "OPTICARVIS_CANDIDATE_SEMANTIC_MODEL",
+    "google/siglip2-base-patch16-224",
+)
 HF_LOCAL_FILES_ONLY = env_bool("OPTICARVIS_HF_LOCAL_FILES_ONLY", True)
 
 
@@ -307,6 +311,7 @@ def current_job_summary():
         "alpamayo_json": ALPAMAYO_JSON,
         "state_json": STATE_JSON,
         "gemma4_model": GEMMA4_MODEL,
+        "candidate_semantic_model": CANDIDATE_SEMANTIC_MODEL,
         "hf_local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
@@ -368,10 +373,10 @@ YOLO_SEG_CONFIDENCE = float(
 # These are used by scene_models.py.
 DEPTH_MODEL = os.environ.get(
     "OPTICARVIS_DEPTH_MODEL",
-    "depth_anything_v2_small",
+    "depth-anything/Depth-Anything-V2-Small-hf",
 )
 
 ROAD_SEG_MODEL = os.environ.get(
     "OPTICARVIS_ROAD_SEG_MODEL",
-    os.environ.get("OPTICARVIS_YOLO_SEG_MODEL", "yolo26x-seg.pt"),
+    "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
 )

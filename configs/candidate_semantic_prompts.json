@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "description": "Candidate discovery prompts derived from the AV explanation policy mapping. They prioritise situations whose cause or intent may not already be obvious to a passenger. These prompts rank windows for later review; they do not replace the Gemma explanation gate.",
+  "positive_groups": {
+    "interaction_region": [
+      "a pedestrian cyclist vehicle or obstacle entering the road or driving path",
+      "a road user emerging from behind an occlusion near the vehicle path",
+      "a pedestrian or cyclist crossing the road in front of the vehicle"
+    ],
+    "pedestrian_intent": [
+      "an occluded pedestrian preparing to enter the road unexpectedly",
+      "a pedestrian close to the driving path with uncertain crossing intent",
+      "a distracted pedestrian moving unpredictably near traffic"
+    ],
+    "proximity_risk": [
+      "a nearby pedestrian cyclist or vehicle closing rapidly",
+      "an obstacle very close to the driving path",
+      "traffic requiring sudden braking or avoidance"
+    ],
+    "critical_conflict": [
+      "an imminent conflict between the vehicle and another road user",
+      "cross traffic or an unprotected turn requiring yielding",
+      "an emergency vehicle or unusual priority conflict"
+    ],
+    "trajectory_uncertainty": [
+      "multiple road users with conflicting possible trajectories",
+      "a vehicle yielding merging or turning with ambiguous intent",
+      "complex intersection traffic with uncertain right of way"
+    ],
+    "unusual_context": [
+      "roadworks or a construction zone changing the normal route",
+      "an accident blocked lane or unexpected road obstacle",
+      "poor visibility or severe occlusion around a traffic interaction"
+    ]
+  },
+  "negative_prompts": [
+    "ordinary unobstructed lane following with no immediate conflict",
+    "normal traffic moving predictably on a clear road",
+    "an empty or routine road scene with no explanation worthy event",
+    "a clearly visible pedestrian using a marked crosswalk while the vehicle yields normally",
+    "an obvious pedestrian crossing with clear right of way and predictable yielding",
+    "a routine stop or yield whose visible cause is immediately understandable"
+  ]
+}

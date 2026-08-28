@@ -227,14 +227,16 @@ SOURCE_VIDEO_DIR = as_project_path(
 )
 
 CLIP_JOBS_JSONL = as_project_path(
-    config_text_value(
+    os.environ.get("OPTICARVIS_CLIP_JOBS_JSONL")
+    or config_text_value(
         ["clip_jobs_jsonl", "CLIP_JOBS_JSONL"],
         os.path.join(WORKFLOW_OUTPUTS, "clip_jobs.jsonl"),
     )
 )
 
 MASTER_INDEX_JSONL = as_project_path(
-    config_text_value(
+    os.environ.get("OPTICARVIS_MASTER_CLIP_INDEX_JSONL")
+    or config_text_value(
         ["master_clip_index_jsonl", "MASTER_CLIP_INDEX_JSONL"],
         os.path.join(WORKFLOW_OUTPUTS, "master_clip_index.jsonl"),
     )

@@ -1,6 +1,6 @@
 {
-  "space_id": "bo_render_space_v2_compact",
-  "description": "Compact BO render space using zero-floor continuous parameters instead of separate visibility booleans.",
+  "space_id": "bo_render_space_v3_four_parameter",
+  "description": "Four parameter preferential BO space for a 14 iteration participant budget. Contour thickness and label scale remain fixed renderer settings.",
   "parameters": {
     "mask_alpha": {
       "type": "float",
@@ -9,26 +9,12 @@
       "default": 0.14,
       "meaning": "0 hides the target mask; higher values increase target mask opacity."
     },
-    "contour_thickness_px": {
-      "type": "int",
-      "min": 0,
-      "max": 5,
-      "default": 2,
-      "meaning": "0 hides the contour; higher values increase target boundary thickness."
-    },
     "trajectory_alpha": {
       "type": "float",
       "min": 0.0,
       "max": 1.0,
       "default": 0.55,
       "meaning": "0 hides the trajectory ribbon; higher values increase trajectory visibility."
-    },
-    "label_scale": {
-      "type": "float",
-      "min": 0.0,
-      "max": 1.4,
-      "default": 1.0,
-      "meaning": "0 hides labels; values above roughly 0.6 show readable labels."
     },
     "background_dim_alpha": {
       "type": "float",

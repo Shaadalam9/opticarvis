@@ -16,6 +16,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 import common
+import candidate_index
 
 
 def normalise_path(path_value):
@@ -50,6 +51,14 @@ CONFIGS = load_config_dict()
 
 
 def config_value(key, default):
+    environment_key = str(key)
+    if not environment_key.startswith("OPTICARVIS_"):
+        environment_key = "OPTICARVIS_" + environment_key
+
+    environment_value = os.environ.get(environment_key)
+    if environment_value is not None and str(environment_value).strip() != "":
+        return environment_value
+
     if key in CONFIGS:
         value = CONFIGS[key]
         if value is not None:
@@ -142,19 +151,31 @@ STRIDE_S = config_float_value("STRIDE_S", 15.0)
 CITY_LIMIT = config_int_value("CITY_LIMIT", 0)
 CITY_FOOTAGE_S = config_float_value("CITY_FOOTAGE_S", 3600.0)
 ONE_CLIP_PER_CITY = config_bool_value("ONE_CLIP_PER_CITY", False)
+CLIPS_PER_CITY = config_int_value("CLIPS_PER_CITY", 1)
+WINDOWS_PER_CITY = config_int_value("WINDOWS_PER_CITY", CLIPS_PER_CITY)
 
-USE_EVENT_CANDIDATE_SEARCH = config_bool_value("USE_EVENT_CANDIDATE_SEARCH", False)
-EVENT_MAX_EVENTS_PER_VIDEO = config_int_value("EVENT_MAX_EVENTS_PER_VIDEO", 10)
-EVENT_WINDOWS_PER_EVENT = config_int_value("EVENT_WINDOWS_PER_EVENT", 6)
-EVENT_MAX_WINDOWS_PER_VIDEO = config_int_value(
-    "EVENT_MAX_WINDOWS_PER_VIDEO",
-    EVENT_MAX_EVENTS_PER_VIDEO * EVENT_WINDOWS_PER_EVENT,
+CANDIDATE_INDEX_PARQUET = resolve_project_path(
+    config_value(
+        "CANDIDATE_INDEX_PARQUET",
+        os.path.join(WORKFLOW_OUTPUTS, "candidate_index.parquet"),
+    )
 )
-EVENT_FALLBACK_WINDOWS_PER_VIDEO = config_int_value(
-    "EVENT_FALLBACK_WINDOWS_PER_VIDEO",
+USE_CANDIDATE_INDEX = config_bool_value("USE_CANDIDATE_INDEX", True)
+CANDIDATE_INDEX_MAX_WINDOWS_PER_VIDEO = config_int_value(
+    "CANDIDATE_INDEX_MAX_WINDOWS_PER_VIDEO",
+    60,
+)
+CANDIDATE_INDEX_MIN_GAP_S = config_float_value(
+    "CANDIDATE_INDEX_MIN_GAP_S",
+    CLIP_LENGTH_S / 2.0,
+)
+CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO = config_int_value(
+    "CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO",
     10,
 )
 PRINT_PROGRESS_EVERY_N_CITIES = config_int_value("PRINT_PROGRESS_EVERY_N_CITIES", 100)
+
+_CANDIDATE_INDEX_ERROR_REPORTED = False
 
 
 def ensure_dir(path_value):
@@ -369,6 +390,10 @@ def intervals_from_value(value):
 
 
 def parse_intervals_for_row(row, video_ids):
+    mapped_intervals = candidate_index.mapping_intervals_for_videos(
+        row,
+        video_ids,
+    )
     intervals_value = get_first(
         row,
         [
@@ -386,7 +411,9 @@ def parse_intervals_for_row(row, video_ids):
     intervals_by_video = {}
 
     for video_id in video_ids:
-        intervals_by_video[video_id] = []
+        intervals_by_video[video_id] = list(
+            mapped_intervals.get(video_id, [])
+        )
 
     if isinstance(parsed, dict):
         for key, value in parsed.items():
@@ -497,73 +524,218 @@ def make_stride_windows(interval_start_s, interval_end_s, max_windows):
     return windows
 
 
-def filter_windows_to_interval(windows, interval_start_s, interval_end_s):
-    filtered = []
+def indexed_windows_for_video(video_id, interval_start_s, interval_end_s):
+    global _CANDIDATE_INDEX_ERROR_REPORTED
 
-    for window in windows:
-        start_s = parse_number(window.get("start_s"), 0.0)
-        end_s = parse_number(window.get("end_s"), start_s + CLIP_LENGTH_S)
+    if not os.path.isfile(CANDIDATE_INDEX_PARQUET):
+        return []
 
-        if end_s <= start_s:
+    try:
+        from candidate_index import candidate_windows_for_video
+
+        return candidate_windows_for_video(
+            CANDIDATE_INDEX_PARQUET,
+            video_id,
+            interval_start_s=interval_start_s,
+            interval_end_s=interval_end_s,
+            clip_length_s=CLIP_LENGTH_S,
+            max_windows=CANDIDATE_INDEX_MAX_WINDOWS_PER_VIDEO,
+            min_start_gap_s=CANDIDATE_INDEX_MIN_GAP_S,
+        )
+    except Exception as error:
+        if not _CANDIDATE_INDEX_ERROR_REPORTED:
+            print("Candidate index could not be read; using stride fallback:")
+            print(CANDIDATE_INDEX_PARQUET)
+            print(str(error))
+            _CANDIDATE_INDEX_ERROR_REPORTED = True
+
+        return []
+
+
+def city_candidate_sort_key(candidate):
+    is_indexed = candidate["selection_method"].startswith("candidate_index_")
+    score = candidate["window"].get("selection_score")
+    rank = candidate["window"].get("selection_rank")
+
+    if score is None:
+        score = float("-inf")
+    if rank is None:
+        rank = 10**12
+
+    return (
+        0 if is_indexed else 1,
+        -float(score),
+        int(rank),
+        int(candidate["discovery_index"]),
+    )
+
+
+def build_jobs_for_city(row, city_index):
+    """Build and cap ranked candidate jobs for one city."""
+    city = str(
+        get_first(
+            row,
+            ["city", "locality", "city_name", "location"],
+            "Unknown",
+        )
+    ).strip()
+    country = str(get_first(row, ["country"], "Unknown")).strip()
+    continent = str(get_first(row, ["continent"], "Unknown")).strip()
+    city_slug = slugify(city)
+    country_slug = slugify(country)
+    video_ids = parse_video_ids(row)
+    intervals_by_video = parse_intervals_for_row(row, video_ids)
+    city_candidates = []
+    used_city_footage_s = 0.0
+    city_footage_limit_enabled = CITY_FOOTAGE_S > 0
+    discovery_index = 0
+
+    for video_id in video_ids:
+        source_video = source_video_path_for(video_id)
+        intervals = intervals_by_video.get(video_id, [])
+
+        for interval in intervals:
+            interval_start_s = float(interval["start_s"])
+            interval_end_s = float(interval["end_s"])
+
+            if interval_end_s - interval_start_s < CLIP_LENGTH_S:
+                continue
+            if city_footage_limit_enabled and used_city_footage_s >= CITY_FOOTAGE_S:
+                break
+
+            effective_interval_end_s = interval_end_s
+
+            if city_footage_limit_enabled:
+                remaining_s = CITY_FOOTAGE_S - used_city_footage_s
+                effective_interval_end_s = min(
+                    interval_end_s,
+                    interval_start_s + remaining_s,
+                )
+
+            if effective_interval_end_s - interval_start_s < CLIP_LENGTH_S:
+                continue
+
+            selection_method = "stride"
+
+            if USE_CANDIDATE_INDEX:
+                candidate_windows = indexed_windows_for_video(
+                    video_id,
+                    interval_start_s,
+                    effective_interval_end_s,
+                )
+
+                if candidate_windows:
+                    source = candidate_windows[0].get(
+                        "selection_source",
+                        "ffprobe_packet_energy",
+                    )
+
+                    if source == "siglip2_keyframe_semantics":
+                        selection_method = "candidate_index_semantic"
+                    else:
+                        selection_method = "candidate_index_packet_energy"
+                else:
+                    candidate_windows = make_stride_windows(
+                        interval_start_s,
+                        effective_interval_end_s,
+                        CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO,
+                    )
+                    selection_method = "stride_fallback"
+            else:
+                candidate_windows = make_stride_windows(
+                    interval_start_s,
+                    effective_interval_end_s,
+                    0,
+                )
+
+            for window in candidate_windows:
+                city_candidates.append(
+                    {
+                        "video_id": video_id,
+                        "source_video": source_video,
+                        "window": window,
+                        "selection_method": selection_method,
+                        "discovery_index": discovery_index,
+                    }
+                )
+                discovery_index += 1
+
+            used_city_footage_s += max(
+                0.0,
+                effective_interval_end_s - interval_start_s,
+            )
+
+        if city_footage_limit_enabled and used_city_footage_s >= CITY_FOOTAGE_S:
+            break
+
+    city_candidates.sort(key=city_candidate_sort_key)
+
+    deduped_candidates = []
+    seen = set()
+
+    for candidate in city_candidates:
+        start_s = float(candidate["window"]["start_s"])
+        key = (candidate["video_id"], int(round(start_s)))
+
+        if key in seen:
             continue
 
-        if start_s < interval_start_s:
-            continue
+        seen.add(key)
+        deduped_candidates.append(candidate)
 
-        if end_s > interval_end_s:
-            continue
+    candidate_cap = WINDOWS_PER_CITY
+    if ONE_CLIP_PER_CITY:
+        candidate_cap = 1
+    if candidate_cap > 0:
+        deduped_candidates = deduped_candidates[:candidate_cap]
 
-        filtered.append(
+    city_jobs = []
+
+    for window_index, candidate in enumerate(deduped_candidates):
+        video_id = candidate["video_id"]
+        source_video = candidate["source_video"]
+        window = candidate["window"]
+        start_s = float(window["start_s"])
+        end_s = float(window["end_s"])
+        start_int = int(round(start_s))
+        clip_tag = video_id + "_" + str(start_int)
+        job_id = (
+            "city"
+            + str(city_index).zfill(3)
+            + "_"
+            + city_slug
+            + "_"
+            + country_slug
+            + "_"
+            + clip_tag
+        )
+
+        city_jobs.append(
             {
-                "start_s": start_s,
-                "end_s": end_s,
-                "selection_score": window.get("score", window.get("selection_score")),
+                "job_id": job_id,
+                "city_index": city_index,
+                "city": city,
+                "country": country,
+                "continent": continent,
+                "video_id": video_id,
+                "source_video": source_video,
+                "segment_start_time_s": start_s,
+                "segment_end_time_s": end_s,
+                "clip_length_s": float(CLIP_LENGTH_S),
+                "clip_video": clip_video_path_for(video_id, start_s),
+                "alpamayo_json": alpamayo_json_path_for(video_id, start_s),
+                "window_index": window_index,
+                "selection_method": candidate["selection_method"],
+                "selection_score": window.get("selection_score"),
+                "selection_rank": window.get("selection_rank"),
+                "packet_bytes_per_s": window.get("packet_bytes_per_s"),
+                "packet_candidate_score": window.get("packet_candidate_score"),
+                "packet_candidate_rank": window.get("packet_candidate_rank"),
+                "semantic_score": window.get("semantic_score"),
             }
         )
 
-    return filtered
-
-
-def dedupe_windows(windows):
-    seen = set()
-    deduped = []
-
-    for window in windows:
-        start_int = int(round(float(window["start_s"])))
-
-        if start_int in seen:
-            continue
-
-        seen.add(start_int)
-        deduped.append(window)
-
-    return deduped
-
-
-def event_windows_for_video(source_video, interval_start_s, interval_end_s):
-    if not os.path.isfile(source_video):
-        return []
-
-    try:
-        from event_candidate_search import select_candidate_windows
-    except Exception:
-        return []
-
-    try:
-        windows = select_candidate_windows(source_video, CLIP_LENGTH_S)
-    except Exception as error:
-        print("Event candidate search failed:")
-        print(source_video)
-        print(str(error))
-        return []
-
-    windows = filter_windows_to_interval(windows, interval_start_s, interval_end_s)
-    windows = dedupe_windows(windows)
-
-    if EVENT_MAX_WINDOWS_PER_VIDEO > 0:
-        windows = windows[:EVENT_MAX_WINDOWS_PER_VIDEO]
-
-    return windows
+    return city_jobs, intervals_by_video
 
 
 def build_jobs():
@@ -572,9 +744,10 @@ def build_jobs():
         print(MAPPING_CSV)
         raise SystemExit(1)
 
+    print("Loading mapping CSV:", MAPPING_CSV, flush=True)
+
     with open(MAPPING_CSV, "r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
+        rows = list(csv.DictReader(handle))
 
     original_row_count = len(rows)
 
@@ -600,132 +773,16 @@ def build_jobs():
 
         if PRINT_PROGRESS_EVERY_N_CITIES > 0:
             if city_index == 1 or city_index % PRINT_PROGRESS_EVERY_N_CITIES == 0:
-                print(
-                    "Building city "
-                    + str(city_index)
-                    + "/"
-                    + str(len(selected_rows))
-                )
+                print("Building city " + str(city_index) + "/" + str(len(selected_rows)))
 
-
-        city = str(get_first(row, ["city", "City", "city_name", "location"], "Unknown")).strip()
-        country = str(get_first(row, ["country", "Country"], "Unknown")).strip()
-        continent = str(get_first(row, ["continent", "Continent"], "Unknown")).strip()
-
-        city_slug = slugify(city)
-        country_slug = slugify(country)
-
+        city_jobs, _intervals = build_jobs_for_city(row, city_index)
+        jobs.extend(city_jobs)
+        city = str(get_first(row, ["city", "locality", "city_name"], "Unknown")).strip()
+        country = str(get_first(row, ["country"], "Unknown")).strip()
+        continent = str(get_first(row, ["continent"], "Unknown")).strip()
         video_ids = parse_video_ids(row)
-        intervals_by_video = parse_intervals_for_row(row, video_ids)
 
-        city_job_count = 0
-        used_city_footage_s = 0.0
-        city_footage_limit_enabled = CITY_FOOTAGE_S > 0
-
-        for video_id in video_ids:
-            source_video = source_video_path_for(video_id)
-            intervals = intervals_by_video.get(video_id, [])
-
-            for interval in intervals:
-                interval_start_s = float(interval["start_s"])
-                interval_end_s = float(interval["end_s"])
-
-                if interval_end_s - interval_start_s < CLIP_LENGTH_S:
-                    continue
-
-                if city_footage_limit_enabled and used_city_footage_s >= CITY_FOOTAGE_S:
-                    break
-
-                effective_interval_end_s = interval_end_s
-
-                if city_footage_limit_enabled:
-                    remaining_s = CITY_FOOTAGE_S - used_city_footage_s
-                    effective_interval_end_s = min(
-                        interval_end_s,
-                        interval_start_s + remaining_s,
-                    )
-
-                if effective_interval_end_s - interval_start_s < CLIP_LENGTH_S:
-                    continue
-
-                selection_method = "stride"
-
-                if USE_EVENT_CANDIDATE_SEARCH:
-                    candidate_windows = event_windows_for_video(
-                        source_video,
-                        interval_start_s,
-                        effective_interval_end_s,
-                    )
-
-                    if candidate_windows:
-                        selection_method = "event_candidate_search"
-                    else:
-                        candidate_windows = make_stride_windows(
-                            interval_start_s,
-                            effective_interval_end_s,
-                            EVENT_FALLBACK_WINDOWS_PER_VIDEO,
-                        )
-                        selection_method = "stride_fallback"
-                else:
-                    candidate_windows = make_stride_windows(
-                        interval_start_s,
-                        effective_interval_end_s,
-                        0,
-                    )
-
-                for window in candidate_windows:
-                    start_s = float(window["start_s"])
-                    end_s = float(window["end_s"])
-                    start_int = int(round(start_s))
-
-                    clip_tag = video_id + "_" + str(start_int)
-
-                    job_id = (
-                        "city"
-                        + str(city_index).zfill(3)
-                        + "_"
-                        + city_slug
-                        + "_"
-                        + country_slug
-                        + "_"
-                        + clip_tag
-                    )
-
-                    job = {
-                        "job_id": job_id,
-                        "city_index": city_index,
-                        "city": city,
-                        "country": country,
-                        "continent": continent,
-                        "video_id": video_id,
-                        "source_video": source_video,
-                        "segment_start_time_s": float(start_s),
-                        "segment_end_time_s": float(end_s),
-                        "clip_length_s": float(CLIP_LENGTH_S),
-                        "clip_video": clip_video_path_for(video_id, start_s),
-                        "alpamayo_json": alpamayo_json_path_for(video_id, start_s),
-                        "selection_method": selection_method,
-                        "selection_score": window.get("selection_score"),
-                    }
-
-                    jobs.append(job)
-                    city_job_count += 1
-
-                    if ONE_CLIP_PER_CITY:
-                        break
-
-                used_city_footage_s += max(0.0, effective_interval_end_s - interval_start_s)
-
-                if ONE_CLIP_PER_CITY and city_job_count > 0:
-                    break
-
-            if ONE_CLIP_PER_CITY and city_job_count > 0:
-                break
-
-            if city_footage_limit_enabled and used_city_footage_s >= CITY_FOOTAGE_S:
-                continue
-
-        if city_job_count == 0:
+        if not city_jobs:
             zero_job_cities.append(city + ", " + country)
 
         city_summaries.append(
@@ -735,7 +792,7 @@ def build_jobs():
                 "country": country,
                 "continent": continent,
                 "videos": len(video_ids),
-                "jobs": city_job_count,
+                "jobs": len(city_jobs),
             }
         )
 
@@ -760,10 +817,15 @@ def write_outputs(jobs, city_summaries, zero_job_cities, original_row_count, sel
         "clip_length_s": CLIP_LENGTH_S,
         "stride_s": STRIDE_S,
         "one_clip_per_city": ONE_CLIP_PER_CITY,
+        "clips_per_city": CLIPS_PER_CITY,
+        "windows_per_city": WINDOWS_PER_CITY,
         "city_footage_s": CITY_FOOTAGE_S,
-        "use_event_candidate_search": USE_EVENT_CANDIDATE_SEARCH,
-        "event_max_windows_per_video": EVENT_MAX_WINDOWS_PER_VIDEO,
-        "event_fallback_windows_per_video": EVENT_FALLBACK_WINDOWS_PER_VIDEO,
+        "use_candidate_index": USE_CANDIDATE_INDEX,
+        "candidate_index_parquet": CANDIDATE_INDEX_PARQUET,
+        "candidate_index_available": os.path.isfile(CANDIDATE_INDEX_PARQUET),
+        "candidate_index_max_windows_per_video": CANDIDATE_INDEX_MAX_WINDOWS_PER_VIDEO,
+        "candidate_index_min_gap_s": CANDIDATE_INDEX_MIN_GAP_S,
+        "candidate_index_fallback_windows_per_video": CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO,
         "print_progress_every_n_cities": PRINT_PROGRESS_EVERY_N_CITIES,
         "video_root": VIDEO_ROOT,
         "clip_root": CLIP_ROOT,
@@ -787,10 +849,15 @@ def write_outputs(jobs, city_summaries, zero_job_cities, original_row_count, sel
     print("clip_length_s:", CLIP_LENGTH_S)
     print("stride_s:", STRIDE_S)
     print("one_clip_per_city:", ONE_CLIP_PER_CITY)
+    print("clips_per_city:", CLIPS_PER_CITY)
+    print("windows_per_city:", WINDOWS_PER_CITY)
     print("city_footage_s:", CITY_FOOTAGE_S)
-    print("use_event_candidate_search:", USE_EVENT_CANDIDATE_SEARCH)
-    print("event_max_windows_per_video:", EVENT_MAX_WINDOWS_PER_VIDEO)
-    print("event_fallback_windows_per_video:", EVENT_FALLBACK_WINDOWS_PER_VIDEO)
+    print("use_candidate_index:", USE_CANDIDATE_INDEX)
+    print("candidate_index_parquet:", CANDIDATE_INDEX_PARQUET)
+    print("candidate_index_available:", os.path.isfile(CANDIDATE_INDEX_PARQUET))
+    print("candidate_index_max_windows_per_video:", CANDIDATE_INDEX_MAX_WINDOWS_PER_VIDEO)
+    print("candidate_index_min_gap_s:", CANDIDATE_INDEX_MIN_GAP_S)
+    print("candidate_index_fallback_windows_per_video:", CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO)
     print("print_progress_every_n_cities:", PRINT_PROGRESS_EVERY_N_CITIES)
     print("video_root:", VIDEO_ROOT)
     print("clip_root:", CLIP_ROOT)
