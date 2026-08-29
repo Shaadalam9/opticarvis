@@ -10,10 +10,9 @@ here rather than left to a batch run to discover:
     and the master index records state_available False for all of them. A rename
     on either side reintroduces that, so the contract is asserted directly.
 
-  * One rendered video per city is the deliverable. The footage budget accrues
-    STRIDE_S per clip rather than CLIP_LENGTH_S, so leaning on it gives 60 clips
-    per city (~6000 for mapping.csv) -- a plausible-looking number that is two
-    orders of magnitude too much render time. CLIPS_PER_CITY is the real cap.
+  * One rendered video per city is the deliverable, but several distinct event
+    candidates may be needed before Gemma accepts one. WINDOWS_PER_CITY caps
+    candidate attempts and CLIPS_PER_CITY independently caps accepted renders.
 
 Runs without a GPU, a clip, a model, or a `config` file. Standalone:
 
@@ -208,7 +207,7 @@ def test_one_failed_job_does_not_abort_the_batch():
     assert os.environ.get("OPTICARVIS_STOP_ON_JOB_FAILURE") is None, (
         "this test assumes the flag is unset by default"
     )
-    assert '"OPTICARVIS_STOP_ON_JOB_FAILURE", "0"' in source, (
+    assert 'config_bool_value("STOP_ON_JOB_FAILURE", False)' in source, (
         "STOP_ON_JOB_FAILURE must default to off"
     )
 
@@ -324,7 +323,7 @@ def test_systemic_failure_guard_exists():
     """N consecutive failures with no success between must stop the batch."""
     source = batch_source()
 
-    assert '"OPTICARVIS_MAX_CONSECUTIVE_FAILURES", "5"' in source
+    assert 'config_int_value("MAX_CONSECUTIVE_FAILURES", 5)' in source
     assert "consecutive_failures[0] >= MAX_CONSECUTIVE_FAILURES" in source
 
     # The streak must reset in BOTH success branches of the pipeline loop.
@@ -436,7 +435,7 @@ def test_planner_ribbon_negates_alpamayo_lateral():
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
 
-    assert '"OPTICARVIS_PLANNER_LATERAL_SIGN", "-1"' in source, (
+    assert 'config_float_value("PLANNER_LATERAL_SIGN", -1.0)' in source, (
         "the planner lateral sign must default to -1 (FLU -> right-positive)"
     )
     assert "PLANNER_LATERAL_SIGN * float(point[1])" in source, (
@@ -525,9 +524,11 @@ def build_jobs(clips_per_city, cities=3):
     return jobs
 
 
-def test_one_clip_per_city_by_default():
+def test_default_builds_ten_candidate_attempts_per_city():
     for city_jobs in build_jobs(clips_per_city=1):
-        assert len(city_jobs) == 1, "expected one clip per city, got %d" % len(city_jobs)
+        assert len(city_jobs) == 10, (
+            "expected ten candidate attempts per city, got %d" % len(city_jobs)
+        )
 
 
 def test_windows_per_city_emits_ordered_candidates():
@@ -579,15 +580,17 @@ def test_mapping_start_and_end_lists_are_paired_per_video():
     }
 
 
-def test_windows_default_matches_clips_cap():
-    """Without OPTICARVIS_WINDOWS_PER_CITY nothing changes: one job per city."""
+def test_candidate_attempt_budget_is_independent_of_render_target():
+    """One accepted render still gets ten ranked candidate opportunities."""
     for city_jobs in build_jobs(clips_per_city=1):
-        assert len(city_jobs) == 1
+        assert len(city_jobs) == 10
 
 
-def test_clips_per_city_cap_is_respected():
+def test_render_target_does_not_reduce_candidate_attempts():
     for city_jobs in build_jobs(clips_per_city=3):
-        assert len(city_jobs) == 3, "expected three clips per city, got %d" % len(city_jobs)
+        assert len(city_jobs) == 10, (
+            "expected ten candidate attempts per city, got %d" % len(city_jobs)
+        )
 
 
 def test_zero_means_uncapped():

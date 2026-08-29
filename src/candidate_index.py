@@ -21,7 +21,7 @@ import subprocess
 from bisect import bisect_left
 
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 
 INDEX_COLUMNS = [
     "index_version",
@@ -61,6 +61,13 @@ INDEX_COLUMNS = [
     "candidate_score",
     "candidate_percentile",
     "candidate_rank",
+    "event_cluster_id",
+    "event_start_s",
+    "event_end_s",
+    "event_representative_start_s",
+    "event_representative_rank",
+    "event_window_count",
+    "is_event_representative",
     "selection_source",
 ]
 
@@ -487,6 +494,91 @@ def index_video(
     return rows
 
 
+def attach_event_clusters(rows, separation_s=None):
+    """Attach ranked, representative centred temporal event clusters.
+
+    Sliding windows around one scene often occupy several adjacent ranks. The
+    best ranked window becomes the event representative and claims overlapping
+    neighbours inside ``separation_s``. This is deliberately non transitive:
+    a chain of five second windows cannot merge an entire drive into one event.
+
+    Every input row is retained for audit and negative sampling. Downstream job
+    selection can use only rows marked ``is_event_representative``.
+    """
+    if not rows:
+        return rows
+
+    configured_separation_s = None
+    if separation_s is not None:
+        configured_separation_s = float(separation_s)
+        if not math.isfinite(configured_separation_s) or configured_separation_s <= 0:
+            raise ValueError("separation_s must be positive")
+
+    partitions = {}
+
+    for index, row in enumerate(rows):
+        key = (
+            str(row.get("video_id", "")),
+            float(row.get("mapping_interval_start_s", 0.0)),
+            float(row.get("mapping_interval_end_s", float("inf"))),
+        )
+        partitions.setdefault(key, []).append(index)
+
+    event_counts = {}
+
+    for partition_key, partition_indices in partitions.items():
+        unassigned = set(partition_indices)
+        video_id = partition_key[0] or "video"
+
+        while unassigned:
+            representative_index = min(
+                unassigned,
+                key=lambda index: (
+                    int(rows[index].get("candidate_rank", 10**12)),
+                    float(rows[index].get("t_start_s", 0.0)),
+                ),
+            )
+            representative = rows[representative_index]
+            representative_start_s = float(representative["t_start_s"])
+            representative_rank = int(representative.get("candidate_rank", 0))
+            current_separation_s = configured_separation_s
+
+            if current_separation_s is None:
+                current_separation_s = float(representative.get("clip_length_s", 0.0))
+                if not math.isfinite(current_separation_s) or current_separation_s <= 0:
+                    raise ValueError("clip_length_s must be positive for event clustering")
+
+            cluster_indices = [
+                index
+                for index in unassigned
+                if abs(float(rows[index]["t_start_s"]) - representative_start_s)
+                < current_separation_s
+            ]
+            event_number = event_counts.get(video_id, 0) + 1
+            event_counts[video_id] = event_number
+            event_cluster_id = "%s_event_%04d" % (
+                video_id,
+                event_number,
+            )
+            event_start_s = min(float(rows[index]["t_start_s"]) for index in cluster_indices)
+            event_end_s = max(float(rows[index]["t_end_s"]) for index in cluster_indices)
+            event_window_count = len(cluster_indices)
+
+            for index in cluster_indices:
+                row = rows[index]
+                row["event_cluster_id"] = event_cluster_id
+                row["event_start_s"] = event_start_s
+                row["event_end_s"] = event_end_s
+                row["event_representative_start_s"] = representative_start_s
+                row["event_representative_rank"] = representative_rank
+                row["event_window_count"] = event_window_count
+                row["is_event_representative"] = index == representative_index
+
+            unassigned.difference_update(cluster_indices)
+
+    return rows
+
+
 def write_parquet_index(rows, output_path):
     """Write a complete index atomically so readers never see a partial file."""
     import pandas as pd
@@ -546,6 +638,42 @@ def _load_index_by_video(index_path):
     return grouped
 
 
+def _true_value(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _optional_float(value):
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _optional_int(value):
+    try:
+        if value is None or (isinstance(value, float) and not math.isfinite(value)):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_string(value):
+    if value is None:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def select_indexed_windows(
     rows,
     interval_start_s,
@@ -561,8 +689,22 @@ def select_indexed_windows(
     max_windows = int(max_windows)
     min_start_gap_s = max(0.0, float(min_start_gap_s))
     selected = []
+    has_event_clusters = any(
+        _true_value(row.get("is_event_representative")) for row in rows
+    )
+    eligible_rows = [
+        row
+        for row in rows
+        if not has_event_clusters or _true_value(row.get("is_event_representative"))
+    ]
+    eligible_rows.sort(
+        key=lambda row: (
+            int(row.get("candidate_rank", 10**12)),
+            float(row.get("t_start_s", 0.0)),
+        )
+    )
 
-    for row in rows:
+    for row in eligible_rows:
         start_s = float(row["t_start_s"])
         end_s = float(row["t_end_s"])
         indexed_length_s = float(row["clip_length_s"])
@@ -597,6 +739,18 @@ def select_indexed_windows(
                     row.get("packet_candidate_rank", row["candidate_rank"])
                 ),
                 "semantic_score": semantic_score,
+                "event_cluster_id": _optional_string(
+                    row.get("event_cluster_id")
+                ),
+                "event_start_s": _optional_float(row.get("event_start_s")),
+                "event_end_s": _optional_float(row.get("event_end_s")),
+                "event_representative_start_s": _optional_float(
+                    row.get("event_representative_start_s")
+                ),
+                "event_representative_rank": _optional_int(
+                    row.get("event_representative_rank")
+                ),
+                "event_window_count": _optional_int(row.get("event_window_count")),
                 "selection_source": str(
                     row.get("selection_source", "ffprobe_packet_energy")
                 ),

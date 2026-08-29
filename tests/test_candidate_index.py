@@ -83,6 +83,80 @@ def test_ranked_selection_respects_interval_length_and_gap():
             assert abs(left - right) >= 10.0
 
 
+def test_event_clustering_preserves_windows_and_marks_distinct_representatives():
+    rows = [
+        {
+            "video_id": "test_video",
+            "mapping_interval_start_s": 0.0,
+            "mapping_interval_end_s": 120.0,
+            "t_start_s": start_s,
+            "t_end_s": start_s + 30.0,
+            "clip_length_s": 30.0,
+            "candidate_score": score,
+            "candidate_rank": rank,
+            "packet_candidate_score": score,
+            "packet_candidate_rank": rank,
+        }
+        for start_s, score, rank in [
+            (0.0, 0.1, 4),
+            (5.0, 0.3, 2),
+            (10.0, 0.5, 1),
+            (15.0, 0.2, 3),
+            (35.0, 0.1, 5),
+            (60.0, 0.0, 6),
+        ]
+    ]
+
+    candidate_index.attach_event_clusters(rows, separation_s=30.0)
+
+    assert len(rows) == 6, "clustering must retain every raw index window"
+    representatives = [row for row in rows if row["is_event_representative"]]
+    assert [row["t_start_s"] for row in representatives] == [10.0, 60.0]
+    assert representatives[0]["event_window_count"] == 5
+    assert representatives[0]["event_start_s"] == 0.0
+    assert representatives[0]["event_end_s"] == 65.0
+    assert len({row["event_cluster_id"] for row in rows}) == 2
+
+
+def test_event_index_selection_returns_only_representatives():
+    rows = [
+        {
+            "video_id": "test_video",
+            "mapping_interval_start_s": 0.0,
+            "mapping_interval_end_s": 120.0,
+            "t_start_s": start_s,
+            "t_end_s": start_s + 30.0,
+            "clip_length_s": 30.0,
+            "candidate_score": score,
+            "candidate_rank": rank,
+            "packet_candidate_score": score,
+            "packet_candidate_rank": rank,
+        }
+        for start_s, score, rank in [
+            (0.0, 0.1, 4),
+            (5.0, 0.3, 2),
+            (10.0, 0.5, 1),
+            (15.0, 0.2, 3),
+            (35.0, 0.1, 5),
+            (60.0, 0.0, 6),
+        ]
+    ]
+    candidate_index.attach_event_clusters(rows, separation_s=30.0)
+
+    selected = candidate_index.select_indexed_windows(
+        rows,
+        interval_start_s=0.0,
+        interval_end_s=120.0,
+        clip_length_s=30.0,
+        max_windows=10,
+        min_start_gap_s=0.0,
+    )
+
+    assert [row["start_s"] for row in selected] == [10.0, 60.0]
+    assert all(row["event_cluster_id"] for row in selected)
+    assert [row["event_window_count"] for row in selected] == [5, 1]
+
+
 def test_packet_windows_are_created_only_inside_mapping_intervals():
     rows = candidate_index.aggregate_packet_windows(
         synthetic_packets(),
@@ -188,6 +262,8 @@ def test_empty_index_can_be_written_with_a_stable_schema():
 
     frame = pd.read_parquet(path, engine="pyarrow")
     assert list(frame.columns) == candidate_index.INDEX_COLUMNS
+    assert "event_cluster_id" in frame.columns
+    assert "is_event_representative" in frame.columns
 
 
 def test_written_index_can_be_queried_without_source_video():

@@ -152,7 +152,7 @@ CITY_LIMIT = config_int_value("CITY_LIMIT", 0)
 CITY_FOOTAGE_S = config_float_value("CITY_FOOTAGE_S", 3600.0)
 ONE_CLIP_PER_CITY = config_bool_value("ONE_CLIP_PER_CITY", False)
 CLIPS_PER_CITY = config_int_value("CLIPS_PER_CITY", 1)
-WINDOWS_PER_CITY = config_int_value("WINDOWS_PER_CITY", CLIPS_PER_CITY)
+WINDOWS_PER_CITY = config_int_value("WINDOWS_PER_CITY", 10)
 
 CANDIDATE_INDEX_PARQUET = resolve_project_path(
     config_value(
@@ -167,7 +167,7 @@ CANDIDATE_INDEX_MAX_WINDOWS_PER_VIDEO = config_int_value(
 )
 CANDIDATE_INDEX_MIN_GAP_S = config_float_value(
     "CANDIDATE_INDEX_MIN_GAP_S",
-    CLIP_LENGTH_S / 2.0,
+    CLIP_LENGTH_S,
 )
 CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO = config_int_value(
     "CANDIDATE_INDEX_FALLBACK_WINDOWS_PER_VIDEO",
@@ -684,8 +684,6 @@ def build_jobs_for_city(row, city_index):
         deduped_candidates.append(candidate)
 
     candidate_cap = WINDOWS_PER_CITY
-    if ONE_CLIP_PER_CITY:
-        candidate_cap = 1
     if candidate_cap > 0:
         deduped_candidates = deduped_candidates[:candidate_cap]
 
@@ -732,6 +730,16 @@ def build_jobs_for_city(row, city_index):
                 "packet_candidate_score": window.get("packet_candidate_score"),
                 "packet_candidate_rank": window.get("packet_candidate_rank"),
                 "semantic_score": window.get("semantic_score"),
+                "event_cluster_id": window.get("event_cluster_id"),
+                "event_start_s": window.get("event_start_s"),
+                "event_end_s": window.get("event_end_s"),
+                "event_representative_start_s": window.get(
+                    "event_representative_start_s"
+                ),
+                "event_representative_rank": window.get(
+                    "event_representative_rank"
+                ),
+                "event_window_count": window.get("event_window_count"),
             }
         )
 

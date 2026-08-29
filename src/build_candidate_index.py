@@ -198,8 +198,11 @@ def summary_path_for(index_path):
 
 
 def print_top_candidates(rows, limit=10):
+    representatives = [
+        row for row in rows if bool(row.get("is_event_representative"))
+    ]
     ranked = sorted(
-        rows,
+        representatives or rows,
         key=lambda row: (
             str(row["video_id"]),
             int(row["candidate_rank"]),
@@ -207,18 +210,20 @@ def print_top_candidates(rows, limit=10):
     )
 
     print("")
-    print("Highest ranked candidate windows")
-    print("================================")
+    print("Highest ranked distinct candidate events")
+    print("========================================")
 
     for row in ranked[: max(0, int(limit))]:
         print(
-            "%s start=%0.2f s rank=%d semantic=%0.4f packet=%0.3f"
+            "%s start=%0.2f s rank=%d semantic=%0.4f packet=%0.3f event=%s windows=%d"
             % (
                 row["video_id"],
                 float(row["t_start_s"]),
                 int(row["candidate_rank"]),
                 float(row.get("semantic_score", float("nan"))),
                 float(row.get("packet_candidate_score", row["candidate_score"])),
+                row.get("event_cluster_id", "unclustered"),
+                int(row.get("event_window_count", 1)),
             )
         )
 
@@ -249,6 +254,10 @@ def main():
     )
     clip_length_s = config_float("CLIP_LENGTH_S", 30.0)
     window_stride_s = config_float("CANDIDATE_INDEX_STRIDE_S", 5.0)
+    event_separation_s = config_float(
+        "CANDIDATE_EVENT_SEPARATION_S",
+        clip_length_s,
+    )
     semantic_enabled = config_bool("CANDIDATE_SEMANTIC_ENABLED", True)
     semantic_prompt_path = config_path(
         "CANDIDATE_SEMANTIC_PROMPTS",
@@ -299,6 +308,7 @@ def main():
     print("missing_videos_skipped:", missing_video_count)
     print("clip_length_s:", clip_length_s)
     print("window_stride_s:", window_stride_s)
+    print("event_separation_s:", event_separation_s)
     print("window_scope: mapping.csv start_time to end_time intervals")
     print("semantic_enabled:", semantic_enabled)
 
@@ -361,6 +371,11 @@ def main():
                     video_id=video_id,
                     intervals=record["intervals"],
                 )
+
+            candidate_index.attach_event_clusters(
+                rows,
+                separation_s=event_separation_s,
+            )
         except Exception as error:
             failed_videos.append(
                 {
@@ -375,6 +390,10 @@ def main():
         all_rows.extend(rows)
         indexed_video_ids.append(video_id)
         print("  windows:", len(rows))
+        print(
+            "  event_clusters:",
+            sum(bool(row.get("is_event_representative")) for row in rows),
+        )
 
         if semantic_scorer is not None:
             print(
@@ -401,6 +420,7 @@ def main():
         "mapping_csv": mapping_csv,
         "clip_length_s": clip_length_s,
         "window_stride_s": window_stride_s,
+        "event_separation_s": event_separation_s,
         "semantic_enabled": semantic_enabled,
         "semantic_model": (
             semantic_scorer.model_id if semantic_scorer is not None else None
@@ -418,6 +438,9 @@ def main():
         "videos_selected": len(records),
         "videos_indexed": len(indexed_video_ids),
         "candidate_windows": len(all_rows),
+        "candidate_events": sum(
+            bool(row.get("is_event_representative")) for row in all_rows
+        ),
         "indexed_video_ids": indexed_video_ids,
         "missing_video_count": missing_video_count,
         "missing_video_ids": missing_video_ids,
@@ -432,6 +455,10 @@ def main():
     print("Index complete")
     print("videos_indexed:", len(indexed_video_ids))
     print("candidate_windows:", len(all_rows))
+    print(
+        "candidate_events:",
+        sum(bool(row.get("is_event_representative")) for row in all_rows),
+    )
     print("missing_videos_skipped:", missing_video_count)
     print("failed_videos:", len(failed_videos))
     print("index:", index_path)
