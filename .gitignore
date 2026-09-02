@@ -183,3 +183,4 @@ lpm_city_sample
 $RECYCLE.BIN/
 *.tmp
 *.temp
+.venv-study/

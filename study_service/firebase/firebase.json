@@ -1,0 +1,4 @@
+{
+  "functions": { "source": "." },
+  "firestore": { "indexes": "firestore.indexes.json" }
+}

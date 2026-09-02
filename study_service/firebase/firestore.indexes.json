@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "preferenceQueries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pid", "order": "ASCENDING" },
+        { "fieldPath": "comparisonStep", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preferenceResults",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pid", "order": "ASCENDING" },
+        { "fieldPath": "comparisonStep", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

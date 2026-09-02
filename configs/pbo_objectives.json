@@ -1,33 +1,28 @@
 {
-  "study_id": "pbo_objectives_v1",
-  "rating_mode": "pairwise_preference",
-  "response_scale": [
-    "strongly_prefer_a",
-    "slightly_prefer_a",
-    "neutral",
-    "slightly_prefer_b",
-    "strongly_prefer_b"
-  ],
-  "objectives": [
-    {
-      "name": "clarity_understanding",
-      "direction": "maximize",
-      "pairwise_question": "Which explanation made it easier to understand why the vehicle behaved this way?"
-    },
-    {
-      "name": "perceived_safety",
-      "direction": "maximize",
-      "pairwise_question": "Which explanation made the vehicle behaviour feel safer?"
-    },
-    {
-      "name": "mental_load_distraction",
-      "direction": "minimize",
-      "pairwise_question": "Which explanation was easier to process and less distracting?"
-    }
-  ],
-  "experimental_condition": {
-    "name": "traffic_context_familiarity",
-    "levels": ["familiar_or_regional", "unfamiliar_or_random"],
-    "note": "This is an experimental condition, not a BO objective."
-  }
+  "study_id": "pbo_holistic_preference_v2",
+  "rating_mode": "forced_choice_pairwise_preference",
+  "preference_question": "Which version would you prefer to have while riding in an automated vehicle?",
+  "response_scale": ["prefer_a", "prefer_b"],
+  "latent_utility": {
+    "count": 1,
+    "model": "PairwiseGP",
+    "acquisition": "AnalyticExpectedUtilityOfBestOption",
+    "note": "EUBO selects both options in each adaptive comparison."
+  },
+  "comparison_budget": {
+    "exploration_sobol": 10,
+    "optimisation_eubo": 4,
+    "total": 14
+  },
+  "transfer": {
+    "optimisation_context": "familiar_city",
+    "evaluation_context": "distant_city",
+    "selection_rule": "highest_posterior_mean_among_evaluated_configs",
+    "update_model_during_distant_city": false
+  },
+  "final_evaluation_measures": [
+    "clarity_understanding",
+    "perceived_safety",
+    "mental_load_distraction"
+  ]
 }

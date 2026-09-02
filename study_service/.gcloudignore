@@ -1,0 +1,9 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+tests/
+simulate.py
+firebase/
+README.md
+NOTICE.md
