@@ -133,6 +133,13 @@ def test_render_space_config_matches_the_service():
     assert tuple(configured["palette_id"]["values"]) == space.PALETTE_VALUES
 
 
+def test_firebase_uses_a_supported_node_runtime():
+    path = os.path.join(SERVICE, "firebase", "package.json")
+    with open(path, "r", encoding="utf-8") as handle:
+        package = json.load(handle)
+    assert package["engines"]["node"] == "22"
+
+
 def main():
     tests = [
         value

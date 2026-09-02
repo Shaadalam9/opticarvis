@@ -1,6 +1,6 @@
 {
   "name": "opticarvis-preference-functions",
-  "engines": { "node": "24" },
+  "engines": { "node": "22" },
   "main": "index.js",
   "dependencies": {
     "firebase-admin": "^13.0.0",
