@@ -102,7 +102,7 @@ class FakeModel:
 
 def _adaptive_pair(comparison_step):
     base = space.default_config()
-    offset = comparison_step - space.N_EXPLORATION_COMPARISONS
+    offset = comparison_step
     option_a = dict(
         base,
         mask_alpha=min(0.7, 0.1 * offset),
@@ -119,6 +119,7 @@ def _adaptive_pair(comparison_step):
 def test_complete_fourteen_comparison_lifecycle():
     fake_db = FakeFirestore()
     main._db = fake_db
+    main.DEFAULT_BUDGET = space.ComparisonBudget(10, 4)
     main.optimizer_core.fit_preference_model = lambda training: FakeModel()
     main.optimizer_core.propose_eubo_pair = (
         lambda model, observed_pair_keys, comparison_step, seed: _adaptive_pair(
@@ -132,6 +133,9 @@ def test_complete_fourteen_comparison_lifecycle():
     client = main.app.test_client()
     response = client.post("/registerUser", json={"userId": "participant-1"})
     assert response.status_code == 200
+    assert response.get_json()["comparisonBudget"]["total"] == 14
+    user = fake_db.collection(main.USER_COLLECTION).documents["participant-1"]
+    assert user["preferenceProtocol"]["protocolId"].endswith("_sobol10_eubo4")
 
     for step in range(1, 15):
         query_id = f"participant-1_comparison_{step}"
@@ -140,6 +144,7 @@ def test_complete_fourteen_comparison_lifecycle():
         query = queries[query_id]
         assert query["comparisonStep"] == step
         assert query["presentationOrderRandomised"] is True
+        assert query["comparisonBudget"]["total"] == 14
 
         fake_db.collection(main.RESULT_COLLECTION).document(f"result-{step}").create(
             {
@@ -163,11 +168,74 @@ def test_complete_fourteen_comparison_lifecycle():
     assert selection["comparisonsCompleted"] == 14
     assert selection["frozenForDistantCity"] is True
     assert selection["modelUpdatedByDistantCity"] is False
+    assert selection["comparisonBudget"]["total"] == 14
+
+
+def test_participant_budget_is_frozen_at_registration():
+    fake_db = FakeFirestore()
+    main._db = fake_db
+    original_default = main.DEFAULT_BUDGET
+    main.DEFAULT_BUDGET = space.ComparisonBudget(2, 2)
+    main.optimizer_core.fit_preference_model = lambda training: FakeModel()
+    main.optimizer_core.propose_eubo_pair = (
+        lambda model, observed_pair_keys, comparison_step, seed: _adaptive_pair(
+            comparison_step
+        )
+    )
+    main.optimizer_core.select_best_observed = (
+        lambda model, raw_configs, model_rows: (raw_configs[-1], 1.25)
+    )
+
+    try:
+        client = main.app.test_client()
+        response = client.post("/registerUser", json={"userId": "participant-frozen"})
+        assert response.status_code == 200
+        assert response.get_json()["comparisonBudget"]["total"] == 4
+
+        # A later deployment default must not change this active participant.
+        main.DEFAULT_BUDGET = space.ComparisonBudget(10, 8)
+
+        for step in range(1, 5):
+            fake_db.collection(main.RESULT_COLLECTION).document(f"frozen-{step}").create(
+                {
+                    "pid": "participant-frozen",
+                    "comparisonStep": step,
+                    "preferredOption": "prefer_a",
+                    "cityPhase": "familiar_optimisation",
+                    "attentionCheckPassed": True,
+                }
+            )
+            response = client.post(
+                "/updatePreference",
+                json={"userId": "participant-frozen", "type": "preferenceResult"},
+            )
+            assert response.status_code == 200, response.data
+
+        assert response.get_json()["studyCompleted"] is True
+        queries = fake_db.collection(main.QUERY_COLLECTION).documents
+        assert "participant-frozen_comparison_5" not in queries
+        assert queries["participant-frozen_comparison_2"]["phase"] == "exploration"
+        assert queries["participant-frozen_comparison_3"]["phase"] == "optimisation"
+        selection = fake_db.collection(main.SELECTION_COLLECTION).documents[
+            "participant-frozen"
+        ]
+        assert selection["comparisonBudget"] == {
+            "explorationSobol": 2,
+            "optimisationEubo": 2,
+            "total": 4,
+        }
+    finally:
+        main.DEFAULT_BUDGET = original_default
 
 
 def main_test_runner():
-    test_complete_fourteen_comparison_lifecycle()
-    print("PASS test_complete_fourteen_comparison_lifecycle")
+    tests = [
+        test_complete_fourteen_comparison_lifecycle,
+        test_participant_budget_is_frozen_at_registration,
+    ]
+    for test in tests:
+        test()
+        print(f"PASS {test.__name__}")
 
 
 if __name__ == "__main__":

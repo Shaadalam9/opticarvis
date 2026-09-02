@@ -1,6 +1,11 @@
 {
   "space_id": "bo_render_space_v3_four_parameter",
-  "description": "Four parameter preferential BO space for a 14 iteration participant budget. Contour thickness and label scale remain fixed renderer settings.",
+  "description": "Four parameter preference BO space with a configurable pairwise comparison budget. Contour thickness and label scale remain fixed renderer settings.",
+  "model_encoding": {
+    "continuous": "normalised to [0, 1]",
+    "palette_id": "one_hot_categorical",
+    "perceptual_spacing": "pending literature review and pilot validation"
+  },
   "parameters": {
     "mask_alpha": {
       "type": "float",

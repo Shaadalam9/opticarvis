@@ -3,22 +3,30 @@
 This folder is an independently deployable study service. It does not share the
 GPU environment used by the video pipeline.
 
-## Approved protocol
+## Pilot protocol default
 
 * Four parameters: mask alpha, trajectory alpha, background dimming, and a
   categorical palette ID.
 * One forced choice question: “Which version would you prefer to have while
   riding in an automated vehicle?”
-* Ten Sobol comparison pairs followed by four EUBO comparison pairs.
-* Fourteen comparisons in total. Each comparison contains options A and B.
+* Ten Sobol comparison pairs followed by four EUBO comparison pairs by default.
+* Fourteen comparisons in total by default. Each comparison contains options A
+  and B.
 * A `PairwiseGP` learns one latent preference utility.
-* After comparison 14, the evaluated configuration with the highest posterior
-  mean utility is frozen for the distant city evaluation.
+* At the configured completion point, the evaluated configuration with the
+  highest posterior mean utility is frozen for the distant city evaluation.
 * Distant city responses must be written to a separate evaluation collection;
   they must never trigger `/updatePreference`.
 
 The three psychological outcomes, clarity, perceived safety, and mental load,
 belong to the final evaluation rather than the preference model.
+
+The default remains 10 Sobol plus 4 EUBO comparisons while the comparison
+budget is evaluated. Set `OPTICARVIS_PBO_EXPLORATION_COMPARISONS` and
+`OPTICARVIS_PBO_EUBO_COMPARISONS` to test another deployment budget. The
+effective budget and protocol identifier are frozen into each participant's
+`users` document at registration. A later deployment change therefore cannot
+alter an active participant's protocol.
 
 ## Firestore contract
 
@@ -29,6 +37,13 @@ The service writes `preferenceQueries/{pid}_comparison_N`:
   "pid": "pseudonymous-participant-id",
   "comparisonStep": 1,
   "phase": "exploration",
+  "protocolVersion": "pbo_pairwise_eubo_v3",
+  "protocolId": "pbo_pairwise_eubo_v3_sobol10_eubo4",
+  "comparisonBudget": {
+    "explorationSobol": 10,
+    "optimisationEubo": 4,
+    "total": 14
+  },
   "question": "Which version would you prefer to have while riding in an automated vehicle?",
   "optionA": {
     "mask_alpha": 0.14,
@@ -62,7 +77,8 @@ the result to the configurations it originally wrote rather than trusting the
 client to send parameter values back.
 
 At completion it writes `studySelections/{pid}` with `selectedConfig` and
-`frozenForDistantCity: true`.
+`frozenForDistantCity: true`. The selection contains the same protocol ID and
+budget for auditable analysis.
 
 ## Local validation
 
@@ -77,6 +93,29 @@ uv pip install --python .venv-study\Scripts\python.exe `
   -r study_service\requirements.txt
 & .venv-study\Scripts\python.exe study_service\simulate.py
 ```
+
+To simulate another budget, set the same variables used by the deployed
+service before running the simulator:
+
+```powershell
+$env:OPTICARVIS_PBO_EXPLORATION_COMPARISONS = "10"
+$env:OPTICARVIS_PBO_EUBO_COMPARISONS = "8"
+& .venv-study\Scripts\python.exe study_service\simulate.py
+```
+
+`compare_budgets.py` runs matched synthetic simulations for candidate EUBO
+budgets and writes an auditable JSON result under `workflow_outputs`. One seed
+is the quick smoke test. Use several seeds for the actual sensitivity analysis.
+
+```powershell
+$env:OPTICARVIS_PBO_EUBO_BUDGETS = "4,8,12"
+$env:OPTICARVIS_PBO_SIMULATION_SEEDS = "7"
+& .venv-study\Scripts\python.exe study_service\compare_budgets.py
+```
+
+These are synthetic results, not participant evidence. The final budget must
+also consider pilot completion time, fatigue, repeated choice consistency, and
+selection stability.
 
 ## EU deployment
 
@@ -116,7 +155,7 @@ gcloud run deploy opticarvis-preference \
   --cpu 2 \
   --timeout 300 \
   --allow-unauthenticated \
-  --set-env-vars FIRESTORE_DATABASE='(default)' \
+  --set-env-vars FIRESTORE_DATABASE='(default)',OPTICARVIS_PBO_EXPLORATION_COMPARISONS=10,OPTICARVIS_PBO_EUBO_COMPARISONS=4 \
   --set-secrets OPTICARVIS_PBO_SHARED_SECRET=OPTIMIZER_SHARED_SECRET:latest
 ```
 

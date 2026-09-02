@@ -13,6 +13,7 @@ claimed to represent a just noticeable difference.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
@@ -21,9 +22,95 @@ PREFERENCE_QUESTION = (
     "Which version would you prefer to have while riding in an automated vehicle?"
 )
 
+PROTOCOL_VERSION = "pbo_pairwise_eubo_v3"
+EXPLORATION_ENV = "OPTICARVIS_PBO_EXPLORATION_COMPARISONS"
+EUBO_ENV = "OPTICARVIS_PBO_EUBO_COMPARISONS"
+
 N_EXPLORATION_COMPARISONS = 10
 N_EUBO_COMPARISONS = 4
 N_TOTAL_COMPARISONS = N_EXPLORATION_COMPARISONS + N_EUBO_COMPARISONS
+
+
+def _positive_integer(name: str, value: object) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a positive integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be a positive integer") from exc
+    if str(value).strip() != str(result) and not isinstance(value, int):
+        raise ValueError(f"{name} must not contain a fractional value")
+    if result < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return result
+
+
+@dataclass(frozen=True)
+class ComparisonBudget:
+    exploration_comparisons: int = N_EXPLORATION_COMPARISONS
+    eubo_comparisons: int = N_EUBO_COMPARISONS
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "exploration_comparisons",
+            _positive_integer(
+                "exploration_comparisons", self.exploration_comparisons
+            ),
+        )
+        object.__setattr__(
+            self,
+            "eubo_comparisons",
+            _positive_integer("eubo_comparisons", self.eubo_comparisons),
+        )
+
+    @property
+    def total_comparisons(self) -> int:
+        return self.exploration_comparisons + self.eubo_comparisons
+
+    @property
+    def protocol_id(self) -> str:
+        return (
+            f"{PROTOCOL_VERSION}_sobol{self.exploration_comparisons}"
+            f"_eubo{self.eubo_comparisons}"
+        )
+
+    def to_document(self) -> dict[str, int]:
+        return {
+            "explorationSobol": self.exploration_comparisons,
+            "optimisationEubo": self.eubo_comparisons,
+            "total": self.total_comparisons,
+        }
+
+
+def comparison_budget_from_document(raw: Mapping[str, object]) -> ComparisonBudget:
+    budget = ComparisonBudget(
+        exploration_comparisons=raw["explorationSobol"],  # type: ignore[arg-type]
+        eubo_comparisons=raw["optimisationEubo"],  # type: ignore[arg-type]
+    )
+    if "total" in raw and _positive_integer("total", raw["total"]) != budget.total_comparisons:
+        raise ValueError("comparison budget total does not match its components")
+    return budget
+
+
+def comparison_budget_from_environment(
+    environ: Mapping[str, str] | None = None,
+) -> ComparisonBudget:
+    values = os.environ if environ is None else environ
+    return ComparisonBudget(
+        exploration_comparisons=values.get(
+            EXPLORATION_ENV, str(N_EXPLORATION_COMPARISONS)
+        ),
+        eubo_comparisons=values.get(EUBO_ENV, str(N_EUBO_COMPARISONS)),
+    )
+
+
+def protocol_document(budget: ComparisonBudget) -> dict[str, object]:
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "protocolId": budget.protocol_id,
+        "comparisonBudget": budget.to_document(),
+    }
 
 
 @dataclass(frozen=True)
@@ -165,11 +252,13 @@ def validate_model_rows(rows: Iterable[Sequence[float]]) -> None:
             raise ValueError("model rows must contain only finite values")
 
 
-def describe() -> str:
+def describe(budget: ComparisonBudget | None = None) -> str:
+    budget = budget or ComparisonBudget()
     lines = [
         "OptiCarVis pairwise preference space",
-        f"comparisons: {N_EXPLORATION_COMPARISONS} Sobol + "
-        f"{N_EUBO_COMPARISONS} EUBO = {N_TOTAL_COMPARISONS}",
+        f"protocol: {budget.protocol_id}",
+        f"comparisons: {budget.exploration_comparisons} Sobol + "
+        f"{budget.eubo_comparisons} EUBO = {budget.total_comparisons}",
         f"question: {PREFERENCE_QUESTION}",
     ]
     for parameter in CONTINUOUS_PARAMETERS:

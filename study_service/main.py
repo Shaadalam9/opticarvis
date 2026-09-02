@@ -1,10 +1,11 @@
 """Firestore mediated OptiCarVis pairwise preference service.
 
-The participant app writes one binary choice per comparison.  This service
-uses ten Sobol comparison pairs followed by four EUBO pairs.  After the
-fourteenth valid comparison it freezes the best evaluated configuration for
-the distant city evaluation; distant city data lives in a different collection
-and never updates the preference model.
+The participant app writes one binary choice per comparison. The deployment
+defines a default Sobol and EUBO budget, which is frozen into each participant's
+Firestore record at registration. Changing the deployment default therefore
+cannot alter an active participant's protocol. At completion the best evaluated
+configuration is frozen for the distant city evaluation; distant city data
+never updates the preference model.
 """
 
 from __future__ import annotations
@@ -33,13 +34,9 @@ FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "(default)")
 QUERY_COLLECTION = os.environ.get("PREFERENCE_QUERY_COLLECTION", "preferenceQueries")
 RESULT_COLLECTION = os.environ.get("PREFERENCE_RESULT_COLLECTION", "preferenceResults")
 SELECTION_COLLECTION = os.environ.get("PREFERENCE_SELECTION_COLLECTION", "studySelections")
+USER_COLLECTION = os.environ.get("PREFERENCE_USER_COLLECTION", "users")
 
-N_EXPLORATION = int(
-    os.environ.get("N_EXPLORATION_COMPARISONS", space.N_EXPLORATION_COMPARISONS)
-)
-N_TOTAL = int(os.environ.get("N_TOTAL_COMPARISONS", space.N_TOTAL_COMPARISONS))
-if N_EXPLORATION != 10 or N_TOTAL != 14:
-    raise ValueError("the approved OptiCarVis protocol requires 10 exploration and 14 total comparisons")
+DEFAULT_BUDGET = space.comparison_budget_from_environment()
 
 _db = None
 _user_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
@@ -93,12 +90,36 @@ def _query_reference(user_id: str, comparison_step: int):
     )
 
 
+def _user_reference(user_id: str):
+    return get_db().collection(USER_COLLECTION).document(user_id)
+
+
+def load_or_freeze_participant_budget(user_id: str) -> space.ComparisonBudget:
+    """Return the budget permanently assigned to one participant."""
+    reference = _user_reference(user_id)
+    snapshot = reference.get()
+    document = snapshot.to_dict() if snapshot.exists else {}
+    protocol = (document or {}).get("preferenceProtocol")
+    if protocol is not None:
+        if protocol.get("protocolVersion") != space.PROTOCOL_VERSION:
+            raise ValueError(
+                f"participant {user_id} uses unsupported preference protocol "
+                f"{protocol.get('protocolVersion')!r}"
+            )
+        return space.comparison_budget_from_document(protocol["comparisonBudget"])
+
+    protocol = space.protocol_document(DEFAULT_BUDGET)
+    reference.set({"preferenceProtocol": protocol}, merge=True)
+    return DEFAULT_BUDGET
+
+
 def write_query(
     user_id: str,
     comparison_step: int,
     option_a: dict,
     option_b: dict,
     phase: str,
+    budget: space.ComparisonBudget,
 ) -> bool:
     # Randomise presentation side deterministically so retries reproduce the
     # same query while A/B position cannot become a systematic confound.
@@ -114,6 +135,7 @@ def write_query(
         "cityPhase": "familiar_optimisation",
         "presentationOrderRandomised": True,
         "createdAt": firestore.SERVER_TIMESTAMP,
+        **space.protocol_document(budget),
     }
     try:
         _query_reference(user_id, comparison_step).create(document)
@@ -127,7 +149,11 @@ def write_query(
         return False
 
 
-def finalize_participant(user_id: str, training: preference_data.TrainingData):
+def finalize_participant(
+    user_id: str,
+    training: preference_data.TrainingData,
+    budget: space.ComparisonBudget,
+):
     model = optimizer_core.fit_preference_model(training)
     final_config, posterior_mean = optimizer_core.select_best_observed(
         model, training.raw_configs, training.model_rows
@@ -141,12 +167,14 @@ def finalize_participant(user_id: str, training: preference_data.TrainingData):
         "frozenForDistantCity": True,
         "modelUpdatedByDistantCity": False,
         "createdAt": firestore.SERVER_TIMESTAMP,
+        **space.protocol_document(budget),
     }
     get_db().collection(SELECTION_COLLECTION).document(user_id).set(selection, merge=True)
-    get_db().collection("users").document(user_id).set(
+    _user_reference(user_id).set(
         {
             "studyOptimisationCompleted": True,
             "studyOptimisationCompletedAt": firestore.SERVER_TIMESTAMP,
+            "completedPreferenceProtocol": space.protocol_document(budget),
         },
         merge=True,
     )
@@ -162,8 +190,9 @@ def health():
             "preferenceQuestion": space.PREFERENCE_QUESTION,
             "parameters": space.PARAMETER_NAMES,
             "modelDimensions": space.D_MODEL,
-            "N_EXPLORATION_COMPARISONS": N_EXPLORATION,
-            "N_TOTAL_COMPARISONS": N_TOTAL,
+            "protocolVersion": space.PROTOCOL_VERSION,
+            "defaultProtocolId": DEFAULT_BUDGET.protocol_id,
+            "defaultComparisonBudget": DEFAULT_BUDGET.to_document(),
             "database": FIRESTORE_DATABASE,
         }
     )
@@ -179,11 +208,26 @@ def register_user():
         return jsonify({"ok": False, "error": "missing userId"}), 400
 
     with _user_locks[user_id]:
+        budget = load_or_freeze_participant_budget(user_id)
         if _query_reference(user_id, 1).get().exists:
-            return jsonify({"ok": True, "skipped": True})
+            return jsonify(
+                {
+                    "ok": True,
+                    "skipped": True,
+                    "protocolId": budget.protocol_id,
+                    "comparisonBudget": budget.to_document(),
+                }
+            )
         option_a, option_b = optimizer_core.sobol_pair(1, seed=_stable_seed(user_id))
-        write_query(user_id, 1, option_a, option_b, "exploration")
-        return jsonify({"ok": True, "comparisonStep": 1})
+        write_query(user_id, 1, option_a, option_b, "exploration", budget)
+        return jsonify(
+            {
+                "ok": True,
+                "comparisonStep": 1,
+                "protocolId": budget.protocol_id,
+                "comparisonBudget": budget.to_document(),
+            }
+        )
 
 
 @app.post("/updatePreference")
@@ -198,10 +242,11 @@ def update_preference():
         return jsonify({"ok": False, "error": "missing userId"}), 400
 
     with _user_locks[user_id]:
+        budget = load_or_freeze_participant_budget(user_id)
         training = load_training_data(user_id)
         completed = len(training.comparisons)
-        if completed >= N_TOTAL:
-            selection = finalize_participant(user_id, training)
+        if completed >= budget.total_comparisons:
+            selection = finalize_participant(user_id, training, budget)
             return jsonify(
                 {
                     "ok": True,
@@ -215,7 +260,7 @@ def update_preference():
             return jsonify({"ok": True, "skipped": True, "nextComparisonStep": next_step})
 
         seed = _stable_seed(user_id)
-        if completed < N_EXPLORATION:
+        if completed < budget.exploration_comparisons:
             option_a, option_b = optimizer_core.sobol_pair(next_step, seed=seed)
             phase = "exploration"
         else:
@@ -228,12 +273,14 @@ def update_preference():
             )
             phase = "optimisation"
 
-        write_query(user_id, next_step, option_a, option_b, phase)
+        write_query(user_id, next_step, option_a, option_b, phase, budget)
         return jsonify(
             {
                 "ok": True,
                 "phase": phase,
                 "comparisonsCompleted": completed,
                 "nextComparisonStep": next_step,
+                "protocolId": budget.protocol_id,
+                "comparisonBudget": budget.to_document(),
             }
         )

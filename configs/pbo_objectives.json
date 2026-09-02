@@ -1,5 +1,6 @@
 {
-  "study_id": "pbo_holistic_preference_v2",
+  "study_id": "pbo_holistic_preference_v3",
+  "protocol_version": "pbo_pairwise_eubo_v3",
   "rating_mode": "forced_choice_pairwise_preference",
   "preference_question": "Which version would you prefer to have while riding in an automated vehicle?",
   "response_scale": ["prefer_a", "prefer_b"],
@@ -10,9 +11,17 @@
     "note": "EUBO selects both options in each adaptive comparison."
   },
   "comparison_budget": {
+    "status": "pilot_default",
     "exploration_sobol": 10,
     "optimisation_eubo": 4,
-    "total": 14
+    "total": 14,
+    "participant_budget_is_frozen": true,
+    "environment_overrides": {
+      "exploration_sobol": "OPTICARVIS_PBO_EXPLORATION_COMPARISONS",
+      "optimisation_eubo": "OPTICARVIS_PBO_EUBO_COMPARISONS"
+    },
+    "candidate_eubo_budgets_for_validation": [4, 8, 12],
+    "note": "Four EUBO comparisons remain the deployment default until simulation and pilot evidence justify a final budget."
   },
   "transfer": {
     "optimisation_context": "familiar_city",
