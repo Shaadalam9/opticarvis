@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111f">
+    <title>OptiCarVis preference test</title>
+    <meta
+      name="description"
+      content="Internal test interface for the OptiCarVis pairwise preference service."
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">OptiCarVis</p>
+          <h1>Preference flow test</h1>
+        </div>
+        <span class="test-badge">Internal test</span>
+      </header>
+
+      <section id="loading-view" class="panel state-panel" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <h2>Connecting to the EU study service</h2>
+        <p id="loading-message">Preparing a secure test session…</p>
+      </section>
+
+      <section id="start-view" class="panel state-panel hidden">
+        <p class="section-label">Backend tester</p>
+        <h2>Run one complete preference session</h2>
+        <p>
+          This internal interface sends genuine choices to the deployed service.
+          It uses an illustrative preview and must not be used as a study stimulus.
+        </p>
+        <ul class="summary-list">
+          <li><strong>18</strong> forced choice comparisons</li>
+          <li><strong>10</strong> Sobol exploration pairs</li>
+          <li><strong>8</strong> EUBO optimisation pairs</li>
+        </ul>
+        <button id="start-button" class="primary-button" type="button">
+          Start test session
+        </button>
+      </section>
+
+      <section id="comparison-view" class="hidden" aria-live="polite">
+        <div class="progress-panel">
+          <div class="progress-copy">
+            <span id="step-label">Comparison 1 of 18</span>
+            <span id="phase-label">Exploration</span>
+          </div>
+          <div
+            class="progress-track"
+            role="progressbar"
+            aria-label="Preference test progress"
+            aria-valuemin="1"
+            aria-valuemax="18"
+            aria-valuenow="1"
+          >
+            <span id="progress-fill"></span>
+          </div>
+        </div>
+
+        <div class="question-block">
+          <p class="section-label">Choose one</p>
+          <h2 id="preference-question">
+            Which version would you prefer to have while riding in an automated vehicle?
+          </h2>
+          <p class="preview-warning">
+            Illustrative preview for backend testing only. It is not an approved study stimulus.
+          </p>
+        </div>
+
+        <div class="comparison-grid">
+          <article id="option-a" class="option-card" aria-labelledby="option-a-title">
+            <div class="option-heading">
+              <span class="option-letter">A</span>
+              <h3 id="option-a-title">Version A</h3>
+            </div>
+            <div class="scene" aria-hidden="true">
+              <img src="scene.jpg" alt="">
+              <div class="scene-dimmer"></div>
+              <div class="target-mask"></div>
+              <svg class="trajectory" viewBox="0 0 640 360" preserveAspectRatio="none">
+                <path d="M310 350 C315 300 328 245 320 190 C316 158 315 136 318 112"></path>
+              </svg>
+            </div>
+            <details>
+              <summary>Technical values</summary>
+              <dl class="parameter-list"></dl>
+            </details>
+            <button class="choice-button" type="button" data-choice="prefer_a">
+              I prefer version A
+            </button>
+          </article>
+
+          <article id="option-b" class="option-card" aria-labelledby="option-b-title">
+            <div class="option-heading">
+              <span class="option-letter">B</span>
+              <h3 id="option-b-title">Version B</h3>
+            </div>
+            <div class="scene" aria-hidden="true">
+              <img src="scene.jpg" alt="">
+              <div class="scene-dimmer"></div>
+              <div class="target-mask"></div>
+              <svg class="trajectory" viewBox="0 0 640 360" preserveAspectRatio="none">
+                <path d="M310 350 C315 300 328 245 320 190 C316 158 315 136 318 112"></path>
+              </svg>
+            </div>
+            <details>
+              <summary>Technical values</summary>
+              <dl class="parameter-list"></dl>
+            </details>
+            <button class="choice-button" type="button" data-choice="prefer_b">
+              I prefer version B
+            </button>
+          </article>
+        </div>
+      </section>
+
+      <section id="complete-view" class="panel state-panel hidden" aria-live="polite">
+        <div class="complete-mark" aria-hidden="true">✓</div>
+        <p class="section-label">Test complete</p>
+        <h2 id="complete-title">All comparisons were processed</h2>
+        <p>
+          The backend has frozen the selected configuration for the distant city evaluation.
+        </p>
+        <div id="selected-config" class="selected-config"></div>
+        <button id="new-session-button" class="secondary-button" type="button">
+          Start another test session
+        </button>
+      </section>
+
+      <section id="error-view" class="panel state-panel hidden" role="alert">
+        <p class="section-label error-label">Unable to continue</p>
+        <h2 id="error-title">The test session could not be loaded</h2>
+        <p id="error-message"></p>
+        <div class="button-row">
+          <button id="retry-button" class="primary-button" type="button">Retry</button>
+          <button id="reset-button" class="secondary-button" type="button">
+            New test session
+          </button>
+        </div>
+      </section>
+
+      <footer>
+        <span>EU deployment</span>
+        <span id="session-label"></span>
+      </footer>
+    </main>
+
+    <script src="/__/firebase/11.10.0/firebase-app-compat.js"></script>
+    <script src="/__/firebase/11.10.0/firebase-auth-compat.js"></script>
+    <script src="/__/firebase/11.10.0/firebase-firestore-compat.js"></script>
+    <script src="/__/firebase/init.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

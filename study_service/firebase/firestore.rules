@@ -1,0 +1,76 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsDocumentId(documentId) {
+      return signedIn() && documentId == request.auth.uid;
+    }
+
+    function isOwnComparisonId(documentId) {
+      return signedIn()
+        && documentId.matches(request.auth.uid + '_comparison_[0-9]+');
+    }
+
+    match /users/{userId} {
+      allow get: if ownsDocumentId(userId);
+      allow list: if false;
+      allow create: if ownsDocumentId(userId)
+        && request.resource.data.keys().hasOnly([
+          'createdAt',
+          'testMode',
+          'clientVersion'
+        ])
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.testMode == true
+        && request.resource.data.clientVersion == 'internal_web_v1';
+      allow update, delete: if false;
+    }
+
+    match /preferenceQueries/{queryId} {
+      allow get: if isOwnComparisonId(queryId);
+      allow list, create, update, delete: if false;
+    }
+
+    match /preferenceResults/{resultId} {
+      allow get: if isOwnComparisonId(resultId);
+      allow list: if false;
+      allow create: if isOwnComparisonId(resultId)
+        && request.resource.data.keys().hasOnly([
+          'pid',
+          'comparisonStep',
+          'preferredOption',
+          'cityPhase',
+          'attentionCheckPassed',
+          'submittedAt',
+          'testMode',
+          'clientVersion'
+        ])
+        && request.resource.data.pid == request.auth.uid
+        && request.resource.data.comparisonStep is int
+        && request.resource.data.comparisonStep >= 1
+        && request.resource.data.comparisonStep <= get(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        ).data.preferenceProtocol.comparisonBudget.total
+        && request.resource.data.preferredOption in ['prefer_a', 'prefer_b']
+        && request.resource.data.cityPhase == 'familiar_optimisation'
+        && request.resource.data.attentionCheckPassed == true
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.testMode == true
+        && request.resource.data.clientVersion == 'internal_web_v1';
+      allow update, delete: if false;
+    }
+
+    match /studySelections/{selectionId} {
+      allow get: if ownsDocumentId(selectionId);
+      allow list, create, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
