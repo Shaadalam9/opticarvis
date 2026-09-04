@@ -9,8 +9,8 @@ GPU environment used by the video pipeline.
   categorical palette ID.
 * One forced choice question: “Which version would you prefer to have while
   riding in an automated vehicle?”
-* Ten Sobol comparison pairs followed by four EUBO comparison pairs by default.
-* Fourteen comparisons in total by default. Each comparison contains options A
+* Ten Sobol comparison pairs followed by eight EUBO comparison pairs by default.
+* Eighteen comparisons in total by default. Each comparison contains options A
   and B.
 * A `PairwiseGP` learns one latent preference utility.
 * At the configured completion point, the evaluated configuration with the
@@ -21,8 +21,8 @@ GPU environment used by the video pipeline.
 The three psychological outcomes, clarity, perceived safety, and mental load,
 belong to the final evaluation rather than the preference model.
 
-The default remains 10 Sobol plus 4 EUBO comparisons while the comparison
-budget is evaluated. Set `OPTICARVIS_PBO_EXPLORATION_COMPARISONS` and
+The pilot default is 10 Sobol plus 8 EUBO comparisons following matched
+synthetic sensitivity testing. Set `OPTICARVIS_PBO_EXPLORATION_COMPARISONS` and
 `OPTICARVIS_PBO_EUBO_COMPARISONS` to test another deployment budget. The
 effective budget and protocol identifier are frozen into each participant's
 `users` document at registration. A later deployment change therefore cannot
@@ -38,11 +38,11 @@ The service writes `preferenceQueries/{pid}_comparison_N`:
   "comparisonStep": 1,
   "phase": "exploration",
   "protocolVersion": "pbo_pairwise_eubo_v3",
-  "protocolId": "pbo_pairwise_eubo_v3_sobol10_eubo4",
+  "protocolId": "pbo_pairwise_eubo_v3_sobol10_eubo8",
   "comparisonBudget": {
     "explorationSobol": 10,
-    "optimisationEubo": 4,
-    "total": 14
+    "optimisationEubo": 8,
+    "total": 18
   },
   "question": "Which version would you prefer to have while riding in an automated vehicle?",
   "optionA": {
@@ -155,7 +155,7 @@ gcloud run deploy opticarvis-preference \
   --cpu 2 \
   --timeout 300 \
   --allow-unauthenticated \
-  --set-env-vars FIRESTORE_DATABASE='(default)',OPTICARVIS_PBO_EXPLORATION_COMPARISONS=10,OPTICARVIS_PBO_EUBO_COMPARISONS=4 \
+  --set-env-vars FIRESTORE_DATABASE='(default)',OPTICARVIS_PBO_EXPLORATION_COMPARISONS=10,OPTICARVIS_PBO_EUBO_COMPARISONS=8 \
   --set-secrets OPTICARVIS_PBO_SHARED_SECRET=OPTIMIZER_SHARED_SECRET:latest
 ```
 

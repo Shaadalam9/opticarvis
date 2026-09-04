@@ -11,17 +11,17 @@
     "note": "EUBO selects both options in each adaptive comparison."
   },
   "comparison_budget": {
-    "status": "pilot_default",
+    "status": "pilot_approved",
     "exploration_sobol": 10,
-    "optimisation_eubo": 4,
-    "total": 14,
+    "optimisation_eubo": 8,
+    "total": 18,
     "participant_budget_is_frozen": true,
     "environment_overrides": {
       "exploration_sobol": "OPTICARVIS_PBO_EXPLORATION_COMPARISONS",
       "optimisation_eubo": "OPTICARVIS_PBO_EUBO_COMPARISONS"
     },
     "candidate_eubo_budgets_for_validation": [4, 8, 12],
-    "note": "Four EUBO comparisons remain the deployment default until simulation and pilot evidence justify a final budget."
+    "note": "Ten Sobol plus eight EUBO comparisons were selected for the pilot after matched synthetic sensitivity testing. The formal study budget remains subject to human pilot evidence."
   },
   "transfer": {
     "optimisation_context": "familiar_city",

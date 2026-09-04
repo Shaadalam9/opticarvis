@@ -116,10 +116,10 @@ def _adaptive_pair(comparison_step):
     return option_a, option_b
 
 
-def test_complete_fourteen_comparison_lifecycle():
+def test_complete_eighteen_comparison_lifecycle():
     fake_db = FakeFirestore()
     main._db = fake_db
-    main.DEFAULT_BUDGET = space.ComparisonBudget(10, 4)
+    main.DEFAULT_BUDGET = space.ComparisonBudget(10, 8)
     main.optimizer_core.fit_preference_model = lambda training: FakeModel()
     main.optimizer_core.propose_eubo_pair = (
         lambda model, observed_pair_keys, comparison_step, seed: _adaptive_pair(
@@ -133,18 +133,18 @@ def test_complete_fourteen_comparison_lifecycle():
     client = main.app.test_client()
     response = client.post("/registerUser", json={"userId": "participant-1"})
     assert response.status_code == 200
-    assert response.get_json()["comparisonBudget"]["total"] == 14
+    assert response.get_json()["comparisonBudget"]["total"] == 18
     user = fake_db.collection(main.USER_COLLECTION).documents["participant-1"]
-    assert user["preferenceProtocol"]["protocolId"].endswith("_sobol10_eubo4")
+    assert user["preferenceProtocol"]["protocolId"].endswith("_sobol10_eubo8")
 
-    for step in range(1, 15):
+    for step in range(1, 19):
         query_id = f"participant-1_comparison_{step}"
         queries = fake_db.collection(main.QUERY_COLLECTION).documents
         assert query_id in queries
         query = queries[query_id]
         assert query["comparisonStep"] == step
         assert query["presentationOrderRandomised"] is True
-        assert query["comparisonBudget"]["total"] == 14
+        assert query["comparisonBudget"]["total"] == 18
 
         fake_db.collection(main.RESULT_COLLECTION).document(f"result-{step}").create(
             {
@@ -163,12 +163,12 @@ def test_complete_fourteen_comparison_lifecycle():
 
     result = response.get_json()
     assert result["studyCompleted"] is True
-    assert len(fake_db.collection(main.QUERY_COLLECTION).documents) == 14
+    assert len(fake_db.collection(main.QUERY_COLLECTION).documents) == 18
     selection = fake_db.collection(main.SELECTION_COLLECTION).documents["participant-1"]
-    assert selection["comparisonsCompleted"] == 14
+    assert selection["comparisonsCompleted"] == 18
     assert selection["frozenForDistantCity"] is True
     assert selection["modelUpdatedByDistantCity"] is False
-    assert selection["comparisonBudget"]["total"] == 14
+    assert selection["comparisonBudget"]["total"] == 18
 
 
 def test_participant_budget_is_frozen_at_registration():
@@ -230,7 +230,7 @@ def test_participant_budget_is_frozen_at_registration():
 
 def main_test_runner():
     tests = [
-        test_complete_fourteen_comparison_lifecycle,
+        test_complete_eighteen_comparison_lifecycle,
         test_participant_budget_is_frozen_at_registration,
     ]
     for test in tests:

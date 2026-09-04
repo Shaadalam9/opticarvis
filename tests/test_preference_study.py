@@ -16,25 +16,25 @@ import space
 import compare_budgets
 
 
-def test_default_comparison_budget_remains_ten_plus_four():
+def test_pilot_default_comparison_budget_is_ten_plus_eight():
     assert space.N_EXPLORATION_COMPARISONS == 10
-    assert space.N_EUBO_COMPARISONS == 4
-    assert space.N_TOTAL_COMPARISONS == 14
+    assert space.N_EUBO_COMPARISONS == 8
+    assert space.N_TOTAL_COMPARISONS == 18
     budget = space.comparison_budget_from_environment({})
     assert budget.exploration_comparisons == 10
-    assert budget.eubo_comparisons == 4
-    assert budget.total_comparisons == 14
+    assert budget.eubo_comparisons == 8
+    assert budget.total_comparisons == 18
 
 
 def test_comparison_budget_can_be_configured_and_round_tripped():
     budget = space.comparison_budget_from_environment(
         {
             space.EXPLORATION_ENV: "10",
-            space.EUBO_ENV: "8",
+            space.EUBO_ENV: "12",
         }
     )
-    assert budget.total_comparisons == 18
-    assert budget.protocol_id.endswith("_sobol10_eubo8")
+    assert budget.total_comparisons == 22
+    assert budget.protocol_id.endswith("_sobol10_eubo12")
     assert space.comparison_budget_from_document(budget.to_document()) == budget
 
 
@@ -168,8 +168,8 @@ def test_protocol_config_matches_the_service():
         protocol = json.load(handle)
     assert protocol["rating_mode"] == "forced_choice_pairwise_preference"
     assert protocol["preference_question"] == space.PREFERENCE_QUESTION
-    assert protocol["comparison_budget"]["total"] == 14
-    assert protocol["comparison_budget"]["status"] == "pilot_default"
+    assert protocol["comparison_budget"]["total"] == 18
+    assert protocol["comparison_budget"]["status"] == "pilot_approved"
     assert protocol["comparison_budget"]["participant_budget_is_frozen"] is True
     assert protocol["comparison_budget"]["environment_overrides"] == {
         "exploration_sobol": space.EXPLORATION_ENV,

@@ -1,8 +1,8 @@
 """Compare candidate EUBO budgets with repeatable synthetic participants.
 
-The deployment default remains ten Sobol plus four EUBO comparisons. This
-offline study evaluates whether additional EUBO comparisons reduce synthetic
-simple regret before the real participant budget is finalised.
+The pilot default is ten Sobol plus eight EUBO comparisons. This offline study
+keeps the 14, 18, and 22 comparison conditions available for sensitivity
+analysis while the formal study budget is evaluated with human pilot evidence.
 """
 
 from __future__ import annotations
