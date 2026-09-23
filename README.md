@@ -433,6 +433,33 @@ keeps the ribbon straight ahead in the lane.
 
 ## Running the pipeline
 
+### Complete staged city analysis
+
+The study preparation workflow has one public entry point:
+
+```powershell
+uv run python .\analysis.py
+```
+
+It creates the ignored output directories when absent, indexes any mapped videos
+already on disk, and prepares one next FTP video for every unresolved city.  It
+then downloads those videos, extends the semantic candidate index, evaluates the
+ranked 30 second windows, renders the first valid explanation, and repeats with
+the next mapped video for a city when all candidates fail.  Accepted cities are
+skipped on later rounds.  An interrupted run can be resumed with the same
+command because the candidate index, rejection history, and accepted manifest
+are written atomically.
+
+The loop ends when every city has an accepted render or has exhausted all mapped
+videos.  Its final records are:
+
+```
+workflow_outputs/final_study_segments.json
+workflow_outputs/final_study_selection/analysis_summary.json
+```
+
+The commands below are lower-level tools for diagnostics and individual renders.
+
 **Build the explanation-gate timeline**
 
 ```bash

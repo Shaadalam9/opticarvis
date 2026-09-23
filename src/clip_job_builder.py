@@ -146,6 +146,17 @@ SUMMARY_JSON = resolve_project_path(
     )
 )
 
+SELECTION_PROGRESS_JSON = resolve_project_path(
+    config_value(
+        "selection_progress_json",
+        os.path.join(
+            WORKFLOW_OUTPUTS,
+            "final_study_selection",
+            "selection_progress.json",
+        ),
+    )
+)
+
 CLIP_LENGTH_S = config_float_value("CLIP_LENGTH_S", 30.0)
 STRIDE_S = config_float_value("STRIDE_S", 15.0)
 CITY_LIMIT = config_int_value("CITY_LIMIT", 0)
@@ -180,6 +191,73 @@ _CANDIDATE_INDEX_ERROR_REPORTED = False
 
 def ensure_dir(path_value):
     os.makedirs(path_value, exist_ok=True)
+
+
+def load_attempt_state():
+    attempted_job_ids = set()
+    attempted_videos_by_city = {}
+    completed_videos_by_city = {}
+
+    if not os.path.isfile(SELECTION_PROGRESS_JSON):
+        return attempted_job_ids, attempted_videos_by_city, completed_videos_by_city
+
+    try:
+        with open(SELECTION_PROGRESS_JSON, "r", encoding="utf-8-sig") as handle:
+            progress = json.load(handle)
+    except (OSError, ValueError):
+        return attempted_job_ids, attempted_videos_by_city, completed_videos_by_city
+
+    for attempt in progress.get("attempts", []):
+        job_id = str(attempt.get("job_id", "")).strip()
+        if job_id:
+            attempted_job_ids.add(job_id)
+
+        try:
+            city_index = int(attempt["city_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        video_id = str(attempt.get("video_id", "")).strip()
+        if video_id:
+            attempted_videos_by_city.setdefault(city_index, set()).add(video_id)
+
+    recorded_completed = progress.get("completed_video_ids_by_city", {})
+    if isinstance(recorded_completed, dict):
+        for city_index, video_ids in recorded_completed.items():
+            try:
+                numeric_city_index = int(city_index)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(video_ids, list):
+                continue
+            completed_videos_by_city[numeric_city_index] = {
+                str(video_id).strip()
+                for video_id in video_ids
+                if str(video_id).strip()
+            }
+
+    # Migrate progress written before completed video IDs were recorded.
+    statuses = progress.get("city_status", {})
+    if isinstance(statuses, dict):
+        for city_index, status in statuses.items():
+            if status != "no_candidate_accepted":
+                continue
+            try:
+                numeric_city_index = int(city_index)
+            except (TypeError, ValueError):
+                continue
+            completed_videos_by_city.setdefault(numeric_city_index, set()).update(
+                attempted_videos_by_city.get(numeric_city_index, set())
+            )
+
+    return attempted_job_ids, attempted_videos_by_city, completed_videos_by_city
+
+
+(
+    ATTEMPTED_JOB_IDS,
+    ATTEMPTED_VIDEOS_BY_CITY,
+    COMPLETED_VIDEOS_BY_CITY,
+) = load_attempt_state()
 
 
 def slugify(value):
@@ -480,6 +558,20 @@ def source_video_path_for(video_id):
     return normalise_path(os.path.join(VIDEO_ROOT, video_id + ".mp4"))
 
 
+def partition_video_ids_by_local_availability(video_ids):
+    """Split mapped IDs into videos that can and cannot be evaluated now."""
+    local_video_ids = []
+    deferred_video_ids = []
+
+    for video_id in video_ids:
+        if os.path.isfile(source_video_path_for(video_id)):
+            local_video_ids.append(video_id)
+        else:
+            deferred_video_ids.append(video_id)
+
+    return local_video_ids, deferred_video_ids
+
+
 def clip_video_path_for(video_id, start_s):
     start_int = int(round(float(start_s)))
     length_int = int(round(float(CLIP_LENGTH_S)))
@@ -570,6 +662,54 @@ def city_candidate_sort_key(candidate):
     )
 
 
+def candidate_job_id(city_index, city_slug, country_slug, candidate):
+    start_int = int(round(float(candidate["window"]["start_s"])))
+    clip_tag = candidate["video_id"] + "_" + str(start_int)
+    return (
+        "city"
+        + str(city_index).zfill(3)
+        + "_"
+        + city_slug
+        + "_"
+        + country_slug
+        + "_"
+        + clip_tag
+    )
+
+
+def prioritise_video_coverage(candidates, video_ids, candidate_cap):
+    """Give every locally available video one chance, then fill by city rank."""
+    first_by_video = {}
+
+    for candidate in candidates:
+        first_by_video.setdefault(candidate["video_id"], candidate)
+
+    ordered = [
+        first_by_video[video_id]
+        for video_id in video_ids
+        if video_id in first_by_video
+    ]
+    selected_keys = {
+        (candidate["video_id"], int(round(float(candidate["window"]["start_s"]))))
+        for candidate in ordered
+    }
+
+    for candidate in candidates:
+        key = (
+            candidate["video_id"],
+            int(round(float(candidate["window"]["start_s"]))),
+        )
+        if key not in selected_keys:
+            ordered.append(candidate)
+            selected_keys.add(key)
+
+    if candidate_cap > 0:
+        effective_cap = max(candidate_cap, len(first_by_video))
+        ordered = ordered[:effective_cap]
+
+    return ordered
+
+
 def build_jobs_for_city(row, city_index):
     """Build and cap ranked candidate jobs for one city."""
     city = str(
@@ -583,16 +723,19 @@ def build_jobs_for_city(row, city_index):
     continent = str(get_first(row, ["continent"], "Unknown")).strip()
     city_slug = slugify(city)
     country_slug = slugify(country)
-    video_ids = parse_video_ids(row)
-    intervals_by_video = parse_intervals_for_row(row, video_ids)
+    mapped_video_ids = parse_video_ids(row)
+    video_ids, _deferred_video_ids = partition_video_ids_by_local_availability(
+        mapped_video_ids
+    )
+    intervals_by_video = parse_intervals_for_row(row, mapped_video_ids)
     city_candidates = []
-    used_city_footage_s = 0.0
-    city_footage_limit_enabled = CITY_FOOTAGE_S > 0
+    video_footage_limit_enabled = CITY_FOOTAGE_S > 0
     discovery_index = 0
 
     for video_id in video_ids:
         source_video = source_video_path_for(video_id)
         intervals = intervals_by_video.get(video_id, [])
+        used_video_footage_s = 0.0
 
         for interval in intervals:
             interval_start_s = float(interval["start_s"])
@@ -600,13 +743,13 @@ def build_jobs_for_city(row, city_index):
 
             if interval_end_s - interval_start_s < CLIP_LENGTH_S:
                 continue
-            if city_footage_limit_enabled and used_city_footage_s >= CITY_FOOTAGE_S:
+            if video_footage_limit_enabled and used_video_footage_s >= CITY_FOOTAGE_S:
                 break
 
             effective_interval_end_s = interval_end_s
 
-            if city_footage_limit_enabled:
-                remaining_s = CITY_FOOTAGE_S - used_city_footage_s
+            if video_footage_limit_enabled:
+                remaining_s = CITY_FOOTAGE_S - used_video_footage_s
                 effective_interval_end_s = min(
                     interval_end_s,
                     interval_start_s + remaining_s,
@@ -660,13 +803,10 @@ def build_jobs_for_city(row, city_index):
                 )
                 discovery_index += 1
 
-            used_city_footage_s += max(
+            used_video_footage_s += max(
                 0.0,
                 effective_interval_end_s - interval_start_s,
             )
-
-        if city_footage_limit_enabled and used_city_footage_s >= CITY_FOOTAGE_S:
-            break
 
     city_candidates.sort(key=city_candidate_sort_key)
 
@@ -683,9 +823,39 @@ def build_jobs_for_city(row, city_index):
         seen.add(key)
         deduped_candidates.append(candidate)
 
-    candidate_cap = WINDOWS_PER_CITY
-    if candidate_cap > 0:
-        deduped_candidates = deduped_candidates[:candidate_cap]
+    remaining_candidates = []
+
+    for candidate in deduped_candidates:
+        job_id = candidate_job_id(city_index, city_slug, country_slug, candidate)
+        if job_id in ATTEMPTED_JOB_IDS:
+            continue
+        remaining_candidates.append(candidate)
+
+    completed_video_ids = set(COMPLETED_VIDEOS_BY_CITY.get(city_index, set()))
+    fresh_video_ids = [
+        video_id for video_id in video_ids if video_id not in completed_video_ids
+    ]
+    fresh_candidates = [
+        candidate
+        for candidate in remaining_candidates
+        if candidate["video_id"] in fresh_video_ids
+    ]
+
+    if fresh_candidates:
+        candidate_pool = fresh_candidates
+        selected_video_ids = fresh_video_ids
+    elif completed_video_ids:
+        candidate_pool = []
+        selected_video_ids = []
+    else:
+        candidate_pool = remaining_candidates
+        selected_video_ids = video_ids
+
+    deduped_candidates = prioritise_video_coverage(
+        candidate_pool,
+        selected_video_ids,
+        WINDOWS_PER_CITY,
+    )
 
     city_jobs = []
 
@@ -695,18 +865,7 @@ def build_jobs_for_city(row, city_index):
         window = candidate["window"]
         start_s = float(window["start_s"])
         end_s = float(window["end_s"])
-        start_int = int(round(start_s))
-        clip_tag = video_id + "_" + str(start_int)
-        job_id = (
-            "city"
-            + str(city_index).zfill(3)
-            + "_"
-            + city_slug
-            + "_"
-            + country_slug
-            + "_"
-            + clip_tag
-        )
+        job_id = candidate_job_id(city_index, city_slug, country_slug, candidate)
 
         city_jobs.append(
             {
@@ -789,6 +948,9 @@ def build_jobs():
         country = str(get_first(row, ["country"], "Unknown")).strip()
         continent = str(get_first(row, ["continent"], "Unknown")).strip()
         video_ids = parse_video_ids(row)
+        local_video_ids, deferred_video_ids = partition_video_ids_by_local_availability(
+            video_ids
+        )
 
         if not city_jobs:
             zero_job_cities.append(city + ", " + country)
@@ -800,6 +962,9 @@ def build_jobs():
                 "country": country,
                 "continent": continent,
                 "videos": len(video_ids),
+                "local_videos": len(local_video_ids),
+                "deferred_videos": len(deferred_video_ids),
+                "deferred_video_ids": deferred_video_ids,
                 "jobs": len(city_jobs),
             }
         )
@@ -811,6 +976,12 @@ def write_outputs(jobs, city_summaries, zero_job_cities, original_row_count, sel
     ensure_dir(WORKFLOW_OUTPUTS)
     ensure_dir(CLIP_ROOT)
     ensure_dir(ALPAMAYO_JSON_ROOT)
+    ensure_dir(os.path.dirname(JOBS_JSONL))
+    ensure_dir(os.path.dirname(SUMMARY_JSON))
+
+    mapped_videos = sum(item["videos"] for item in city_summaries)
+    local_videos = sum(item["local_videos"] for item in city_summaries)
+    deferred_videos = sum(item["deferred_videos"] for item in city_summaries)
 
     with open(JOBS_JSONL, "w", encoding="utf-8", newline="\n") as handle:
         for job in jobs:
@@ -822,6 +993,11 @@ def write_outputs(jobs, city_summaries, zero_job_cities, original_row_count, sel
         "mapping_rows": original_row_count,
         "cities": selected_row_count,
         "total_jobs": len(jobs),
+        "mapped_videos": mapped_videos,
+        "local_videos": local_videos,
+        "deferred_videos": deferred_videos,
+        "selection_progress_json": SELECTION_PROGRESS_JSON,
+        "attempted_job_ids_loaded": len(ATTEMPTED_JOB_IDS),
         "clip_length_s": CLIP_LENGTH_S,
         "stride_s": STRIDE_S,
         "one_clip_per_city": ONE_CLIP_PER_CITY,
@@ -854,6 +1030,10 @@ def write_outputs(jobs, city_summaries, zero_job_cities, original_row_count, sel
     print("mapping_csv:", MAPPING_CSV)
     print("cities:", selected_row_count)
     print("total_jobs:", len(jobs))
+    print("mapped_videos:", mapped_videos)
+    print("local_videos:", local_videos)
+    print("deferred_videos:", deferred_videos)
+    print("attempted_job_ids_loaded:", len(ATTEMPTED_JOB_IDS))
     print("clip_length_s:", CLIP_LENGTH_S)
     print("stride_s:", STRIDE_S)
     print("one_clip_per_city:", ONE_CLIP_PER_CITY)

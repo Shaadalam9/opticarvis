@@ -13,6 +13,8 @@ dependencies = [
     "numpy>=2.4.6",
     "opencv-python>=4.13.0.92",
     "pandas>=3.0.3",
+    # Candidate indices are persisted as Parquet and explicitly use this engine.
+    "pyarrow>=23.0.1",
     "pillow>=12.2.0",
     "plotly>=6.7.0",
     "pycountry>=26.2.16",

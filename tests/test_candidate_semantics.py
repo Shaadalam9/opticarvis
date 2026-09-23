@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import types
 
 import numpy as np
 
@@ -83,8 +84,182 @@ def test_transformers_tensor_feature_output_is_preserved():
     assert candidate_semantics.pooled_feature_tensor(pooled) is pooled
 
 
+def test_dense_keyframes_are_sampled_at_the_configured_minimum_gap():
+    timestamps = [0.0, 0.2, 0.8, 1.9, 2.0, 2.1, 4.0]
+    selected = []
+    last_selected = None
+
+    for timestamp in timestamps:
+        if candidate_semantics.should_sample_timestamp(
+            timestamp,
+            last_selected,
+            2.0,
+        ):
+            selected.append(timestamp)
+            last_selected = timestamp
+
+    assert selected == [0.0, 2.0, 4.0]
+
+
 def test_semantic_implementation_version_guards_stale_file_copies():
-    assert candidate_semantics.IMPLEMENTATION_VERSION == 4
+    assert candidate_semantics.IMPLEMENTATION_VERSION == 8
+
+
+def test_packet_demux_decodes_only_selected_keyframes():
+    class FakeFrame(object):
+        def __init__(self, pts):
+            self.pts = pts
+
+        def to_image(self):
+            return np.zeros((2, 2, 3), dtype=np.uint8)
+
+    class FakePacket(object):
+        def __init__(self, pts):
+            self.pts = pts
+            self.dts = pts
+            self.is_keyframe = True
+            self.decode_calls = 0
+
+        def decode(self):
+            self.decode_calls += 1
+            return [FakeFrame(self.pts)]
+
+    class FakeCodecContext(object):
+        skip_frame = None
+
+        def flush_buffers(self):
+            return None
+
+    class FakeStream(object):
+        time_base = 1.0
+        codec_context = FakeCodecContext()
+
+    class FakeContainer(object):
+        def __init__(self):
+            self.streams = types.SimpleNamespace(video=[FakeStream()])
+            self.packets = [FakePacket(pts) for pts in range(10)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def seek(self, _offset, **_kwargs):
+            return None
+
+        def demux(self, _stream):
+            yield from self.packets
+
+    container = FakeContainer()
+    fake_av = types.SimpleNamespace(open=lambda _path: container)
+    original_av = sys.modules.get("av")
+    sys.modules["av"] = fake_av
+
+    try:
+        encoder = candidate_semantics.SiglipKeyframeEncoder(
+            batch_size=2,
+            min_frame_gap_s=2.0,
+        )
+        encoder.encode_images = lambda images: np.ones(
+            (len(images), 3),
+            dtype=np.float32,
+        )
+        times, embeddings = encoder.encode_video_keyframes(
+            "unused.mp4",
+            intervals=[{"start_s": 0.0, "end_s": 10.0}],
+        )
+    finally:
+        if original_av is None:
+            del sys.modules["av"]
+        else:
+            sys.modules["av"] = original_av
+
+    assert times.tolist() == [0.0, 2.0, 4.0, 6.0, 8.0]
+    assert embeddings.shape == (5, 3)
+    assert encoder.last_decoder_mode == "keyframe_packet_demux"
+    assert encoder.last_demuxed_packets == 10
+    assert encoder.last_decoded_keyframes == 5
+    assert encoder.last_support_packets_decoded == 0
+    assert sum(packet.decode_calls for packet in container.packets) == 5
+
+
+def test_packet_demux_handles_delayed_codec_output():
+    class FakeFrame(object):
+        def __init__(self, pts):
+            self.pts = pts
+
+        def to_image(self):
+            return np.zeros((2, 2, 3), dtype=np.uint8)
+
+    class FakePacket(object):
+        def __init__(self, pts):
+            self.pts = pts
+            self.dts = pts
+            self.is_keyframe = pts % 2 == 0
+            self.decode_calls = 0
+
+        def decode(self):
+            self.decode_calls += 1
+            if self.is_keyframe:
+                return []
+            return [FakeFrame(self.pts - 1)]
+
+    class FakeCodecContext(object):
+        skip_frame = None
+
+        def flush_buffers(self):
+            return None
+
+    class FakeStream(object):
+        time_base = 1.0
+        codec_context = FakeCodecContext()
+
+    class FakeContainer(object):
+        def __init__(self):
+            self.streams = types.SimpleNamespace(video=[FakeStream()])
+            self.packets = [FakePacket(pts) for pts in range(10)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def seek(self, _offset, **_kwargs):
+            return None
+
+        def demux(self, _stream):
+            yield from self.packets
+
+    container = FakeContainer()
+    fake_av = types.SimpleNamespace(open=lambda _path: container)
+    original_av = sys.modules.get("av")
+    sys.modules["av"] = fake_av
+
+    try:
+        encoder = candidate_semantics.SiglipKeyframeEncoder(
+            batch_size=2,
+            min_frame_gap_s=2.0,
+        )
+        encoder.encode_images = lambda images: np.ones(
+            (len(images), 3),
+            dtype=np.float32,
+        )
+        times, embeddings = encoder.encode_video_keyframes(
+            "unused.mp4",
+            intervals=[{"start_s": 0.0, "end_s": 10.0}],
+        )
+    finally:
+        if original_av is None:
+            del sys.modules["av"]
+        else:
+            sys.modules["av"] = original_av
+
+    assert times.tolist() == [0.0, 2.0, 4.0, 6.0, 8.0]
+    assert embeddings.shape == (5, 3)
+    assert encoder.last_decoded_keyframes == 5
+    assert encoder.last_support_packets_decoded == 5
 
 
 def test_event_margin_ranks_above_ordinary_driving():
@@ -201,6 +376,37 @@ def test_embedding_cache_is_invalidated_when_mapping_intervals_change():
         source,
         "test/model",
         intervals=[{"start_s": 20.0, "end_s": 50.0}],
+    ) is None
+
+
+def test_embedding_cache_is_invalidated_when_sampling_gap_changes():
+    directory = tempfile.mkdtemp()
+    source = os.path.join(directory, "source.mp4")
+    cache = os.path.join(directory, "cache", "source.npz")
+
+    with open(source, "wb") as handle:
+        handle.write(b"source")
+
+    candidate_semantics.write_embedding_cache(
+        cache,
+        source,
+        "test/model",
+        [0.0, 2.0],
+        [[1.0, 0.0], [0.0, 1.0]],
+        min_frame_gap_s=2.0,
+    )
+
+    assert candidate_semantics.load_embedding_cache(
+        cache,
+        source,
+        "test/model",
+        min_frame_gap_s=2.0,
+    ) is not None
+    assert candidate_semantics.load_embedding_cache(
+        cache,
+        source,
+        "test/model",
+        min_frame_gap_s=1.0,
     ) is None
 
 

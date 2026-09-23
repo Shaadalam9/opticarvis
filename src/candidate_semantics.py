@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import time
 
 import numpy as np
 
@@ -18,8 +19,8 @@ from pipeline_common import CANDIDATE_SEMANTIC_MODEL, HF_LOCAL_FILES_ONLY
 from candidate_index import normalise_intervals
 
 
-CACHE_VERSION = 2
-IMPLEMENTATION_VERSION = 4
+CACHE_VERSION = 3
+IMPLEMENTATION_VERSION = 8
 SEMANTIC_GROUPS = (
     "interaction_region",
     "pedestrian_intent",
@@ -124,6 +125,16 @@ def top_k_mean(values, top_k=2):
     count = min(max(1, int(top_k)), array.size)
     highest = np.partition(array, array.size - count)[-count:]
     return float(np.mean(highest))
+
+
+def should_sample_timestamp(timestamp_s, last_selected_s, min_frame_gap_s):
+    """Return whether a decoded keyframe is far enough from the last sample."""
+    if last_selected_s is None:
+        return True
+
+    return float(timestamp_s) >= (
+        float(last_selected_s) + max(0.0, float(min_frame_gap_s)) - 1e-9
+    )
 
 
 def semantic_window_features(
@@ -253,7 +264,13 @@ def interval_signature(intervals):
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def load_embedding_cache(cache_path, source_video, model_id, intervals=None):
+def load_embedding_cache(
+    cache_path,
+    source_video,
+    model_id,
+    intervals=None,
+    min_frame_gap_s=None,
+):
     if not os.path.isfile(cache_path):
         return None
 
@@ -271,6 +288,17 @@ def load_embedding_cache(cache_path, source_video, model_id, intervals=None):
                 return None
             if str(cached["interval_signature"].item()) != interval_signature(
                 intervals
+            ):
+                return None
+            if (
+                min_frame_gap_s is not None
+                and "min_frame_gap_s" in cached.files
+                and not math.isclose(
+                    float(cached["min_frame_gap_s"].item()),
+                    float(min_frame_gap_s),
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
             ):
                 return None
 
@@ -292,6 +320,7 @@ def write_embedding_cache(
     keyframe_times_s,
     image_embeddings,
     intervals=None,
+    min_frame_gap_s=None,
 ):
     source_stat = os.stat(source_video)
     parent = os.path.dirname(cache_path)
@@ -306,6 +335,10 @@ def write_embedding_cache(
             source_size_bytes=np.asarray(source_stat.st_size, dtype=np.int64),
             source_mtime_ns=np.asarray(source_stat.st_mtime_ns, dtype=np.int64),
             interval_signature=np.asarray(interval_signature(intervals)),
+            min_frame_gap_s=np.asarray(
+                float(min_frame_gap_s or 0.0),
+                dtype=np.float64,
+            ),
             keyframe_times_s=np.asarray(keyframe_times_s, dtype=np.float64),
             image_embeddings=np.asarray(image_embeddings, dtype=np.float32),
         )
@@ -320,7 +353,13 @@ def write_embedding_cache(
 class SiglipKeyframeEncoder(object):
     """Lazy SigLIP2 encoder shared across every video in one indexing run."""
 
-    def __init__(self, model_id=None, local_files_only=None, batch_size=32):
+    def __init__(
+        self,
+        model_id=None,
+        local_files_only=None,
+        batch_size=32,
+        min_frame_gap_s=2.0,
+    ):
         self.model_id = str(model_id or CANDIDATE_SEMANTIC_MODEL)
         self.local_files_only = (
             HF_LOCAL_FILES_ONLY
@@ -328,10 +367,18 @@ class SiglipKeyframeEncoder(object):
             else bool(local_files_only)
         )
         self.batch_size = max(1, int(batch_size))
+        self.min_frame_gap_s = max(0.0, float(min_frame_gap_s))
         self._torch = None
         self._processor = None
         self._model = None
         self._device = None
+        self.last_decoded_keyframes = 0
+        self.last_selected_frames = 0
+        self.last_decode_s = 0.0
+        self.last_inference_s = 0.0
+        self.last_decoder_mode = None
+        self.last_demuxed_packets = 0
+        self.last_support_packets_decoded = 0
 
     def _ensure_loaded(self):
         if self._model is not None:
@@ -394,24 +441,48 @@ class SiglipKeyframeEncoder(object):
     def encode_video_keyframes(self, source_video, intervals=None):
         import av
 
+        started_s = time.perf_counter()
         times = []
         batches = []
         pending_images = []
         pending_times = []
+        decoded_keyframes = 0
+        demuxed_packets = 0
+        support_packets_decoded = 0
+        inference_s = 0.0
 
         allowed_intervals = normalise_intervals(intervals)
 
         if intervals is not None and not allowed_intervals:
             raise ValueError("No valid mapping intervals for %s" % source_video)
 
+        def append_frame(frame, timestamp_s):
+            nonlocal inference_s, pending_images, pending_times
+            pending_times.append(timestamp_s)
+            pending_images.append(frame.to_image())
+
+            if len(pending_images) >= self.batch_size:
+                inference_started_s = time.perf_counter()
+                batches.append(self.encode_images(pending_images))
+                inference_s += time.perf_counter() - inference_started_s
+                times.extend(pending_times)
+                pending_images = []
+                pending_times = []
+
         with av.open(source_video) as container:
             stream = container.streams.video[0]
-            stream.codec_context.skip_frame = "NONKEY"
-            decode_intervals = allowed_intervals or [None]
 
-            for interval in decode_intervals:
-                if interval is not None:
-                    offset = int(interval["start_s"] / float(stream.time_base))
+            if allowed_intervals and self.min_frame_gap_s > 0:
+                self.last_decoder_mode = "keyframe_packet_demux"
+                stream.codec_context.skip_frame = "DEFAULT"
+
+                for interval in allowed_intervals:
+                    start_s = float(interval["start_s"])
+                    end_s = float(interval["end_s"])
+                    last_selected_s = None
+                    pending_timestamp_s = None
+                    pending_support_packets = 0
+                    offset = int(start_s / float(stream.time_base))
                     container.seek(
                         offset,
                         backward=True,
@@ -419,34 +490,143 @@ class SiglipKeyframeEncoder(object):
                         stream=stream,
                     )
 
-                for frame in container.decode(stream):
-                    if frame.pts is None:
-                        continue
+                    for packet in container.demux(stream):
+                        demuxed_packets += 1
 
-                    timestamp_s = float(frame.pts * stream.time_base)
+                        if pending_timestamp_s is not None:
+                            support_packets_decoded += 1
+                            pending_support_packets += 1
 
-                    if not math.isfinite(timestamp_s) or timestamp_s < 0:
-                        continue
-                    if interval is not None and timestamp_s < interval["start_s"]:
-                        continue
-                    if interval is not None and timestamp_s >= interval["end_s"]:
-                        break
+                            try:
+                                decoded_frames = packet.decode()
+                            except Exception:
+                                decoded_frames = []
 
-                    pending_times.append(timestamp_s)
-                    pending_images.append(frame.to_image())
+                            if decoded_frames:
+                                append_frame(
+                                    decoded_frames[0],
+                                    pending_timestamp_s,
+                                )
+                                last_selected_s = pending_timestamp_s
+                                pending_timestamp_s = None
+                                pending_support_packets = 0
+                            elif pending_support_packets >= 16:
+                                pending_timestamp_s = None
+                                pending_support_packets = 0
 
-                    if len(pending_images) >= self.batch_size:
-                        batches.append(self.encode_images(pending_images))
-                        times.extend(pending_times)
-                        pending_images = []
-                        pending_times = []
+                            continue
+
+                        timestamp = (
+                            packet.pts if packet.pts is not None else packet.dts
+                        )
+
+                        if timestamp is None:
+                            continue
+
+                        timestamp_s = float(timestamp * stream.time_base)
+
+                        if not math.isfinite(timestamp_s) or timestamp_s < start_s:
+                            continue
+                        if timestamp_s >= end_s:
+                            break
+                        if not bool(getattr(packet, "is_keyframe", False)):
+                            continue
+                        if not should_sample_timestamp(
+                            timestamp_s,
+                            last_selected_s,
+                            self.min_frame_gap_s,
+                        ):
+                            continue
+
+                        flush = getattr(
+                            stream.codec_context,
+                            "flush_buffers",
+                            None,
+                        )
+                        if callable(flush):
+                            flush()
+
+                        decoded_keyframes += 1
+
+                        try:
+                            decoded_frames = packet.decode()
+                        except Exception:
+                            decoded_frames = []
+
+                        if not decoded_frames:
+                            pending_timestamp_s = timestamp_s
+                            pending_support_packets = 0
+                            continue
+
+                        frame = decoded_frames[0]
+                        append_frame(frame, timestamp_s)
+                        last_selected_s = timestamp_s
+            else:
+                self.last_decoder_mode = "sequential"
+                stream.codec_context.skip_frame = "NONKEY"
+                decode_intervals = allowed_intervals or [None]
+
+                for interval in decode_intervals:
+                    last_selected_s = None
+
+                    if interval is not None:
+                        offset = int(
+                            interval["start_s"] / float(stream.time_base)
+                        )
+                        container.seek(
+                            offset,
+                            backward=True,
+                            any_frame=False,
+                            stream=stream,
+                        )
+
+                    for frame in container.decode(stream):
+                        decoded_keyframes += 1
+
+                        if frame.pts is None:
+                            continue
+
+                        timestamp_s = float(frame.pts * stream.time_base)
+
+                        if not math.isfinite(timestamp_s) or timestamp_s < 0:
+                            continue
+                        if (
+                            interval is not None
+                            and timestamp_s < interval["start_s"]
+                        ):
+                            continue
+                        if (
+                            interval is not None
+                            and timestamp_s >= interval["end_s"]
+                        ):
+                            break
+
+                        if not should_sample_timestamp(
+                            timestamp_s,
+                            last_selected_s,
+                            self.min_frame_gap_s,
+                        ):
+                            continue
+
+                        last_selected_s = timestamp_s
+                        append_frame(frame, timestamp_s)
 
         if pending_images:
+            inference_started_s = time.perf_counter()
             batches.append(self.encode_images(pending_images))
+            inference_s += time.perf_counter() - inference_started_s
             times.extend(pending_times)
 
         if not batches:
             raise ValueError("No decodable keyframes in %s" % source_video)
+
+        elapsed_s = time.perf_counter() - started_s
+        self.last_decoded_keyframes = decoded_keyframes
+        self.last_demuxed_packets = demuxed_packets
+        self.last_support_packets_decoded = support_packets_decoded
+        self.last_selected_frames = len(times)
+        self.last_inference_s = inference_s
+        self.last_decode_s = max(0.0, elapsed_s - inference_s)
 
         return np.asarray(times, dtype=np.float64), np.concatenate(batches, axis=0)
 
@@ -461,6 +641,7 @@ class SemanticCandidateScorer(object):
         model_id=None,
         local_files_only=None,
         batch_size=32,
+        min_frame_gap_s=2.0,
         top_k=2,
     ):
         self.prompt_path = os.path.abspath(prompt_path)
@@ -472,9 +653,11 @@ class SemanticCandidateScorer(object):
             model_id=model_id,
             local_files_only=local_files_only,
             batch_size=batch_size,
+            min_frame_gap_s=min_frame_gap_s,
         )
         self._text_embeddings = None
         self.last_cache_hit = False
+        self.last_embedding_count = 0
 
     @property
     def model_id(self):
@@ -502,10 +685,12 @@ class SemanticCandidateScorer(object):
             source_video,
             self.model_id,
             intervals=intervals,
+            min_frame_gap_s=self.encoder.min_frame_gap_s,
         )
 
         if cached is not None:
             self.last_cache_hit = True
+            self.last_embedding_count = len(cached[0])
             return cached
 
         self.last_cache_hit = False
@@ -513,6 +698,7 @@ class SemanticCandidateScorer(object):
             source_video,
             intervals=intervals,
         )
+        self.last_embedding_count = len(times)
         write_embedding_cache(
             path,
             source_video,
@@ -520,6 +706,7 @@ class SemanticCandidateScorer(object):
             times,
             embeddings,
             intervals=intervals,
+            min_frame_gap_s=self.encoder.min_frame_gap_s,
         )
         return times, embeddings
 

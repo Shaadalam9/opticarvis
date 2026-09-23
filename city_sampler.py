@@ -54,7 +54,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 INPUT_CSV = PROJECT_ROOT / "docs" / "mapping_original.csv"
 OUTPUT_DIR = PROJECT_ROOT / "lpm_city_sample"
 
-SAMPLE_SIZE = 100
+SAMPLE_SIZE = 150
 SEED = 20260818
 
 # Population damping.

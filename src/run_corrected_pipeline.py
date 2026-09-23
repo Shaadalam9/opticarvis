@@ -132,6 +132,25 @@ def main():
     run_step("depth_estimation_module.py")
     run_step("mirage_effect_planner.py")
 
+    # A positive timing decision is necessary but not sufficient for a study
+    # stimulus.  The grounding stages may still find that no visual target can
+    # be represented.  In that case the planner deliberately emits no layers;
+    # stop here so a clean pass-through cannot be mistaken for an accepted
+    # explanation render merely because an MP4 was written.
+    state = load_state()
+    mirage = state.get("mirage", {})
+    explanation_policy = mirage.get("explanation_policy", "do_not_render")
+    visual_layer_count = int(mirage.get("visual_layer_count", 0) or 0)
+
+    if explanation_policy == "do_not_render" or visual_layer_count < 1:
+        print("")
+        print("MIRAGE produced no valid visual explanation.")
+        print("No trajectory, anchoring or rendering will run.")
+        print("explanation_policy:", explanation_policy)
+        print("visual_layer_count:", visual_layer_count)
+        print("State JSON:", STATE_JSON)
+        return
+
     # Reconstruct the ego's future path so the ribbon can bend into real turns
     # (OPTICARVIS_VO_TRAJECTORY; the renderer picks the track up from
     # ego_trajectory.py's default output path). Failure is expected on some

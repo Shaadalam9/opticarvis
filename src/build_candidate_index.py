@@ -268,6 +268,10 @@ def main():
         os.path.join("workflow_outputs", "candidate_keyframe_embeddings"),
     )
     semantic_batch_size = config_int("CANDIDATE_SEMANTIC_BATCH_SIZE", 32)
+    semantic_min_frame_gap_s = config_float(
+        "CANDIDATE_SEMANTIC_MIN_FRAME_GAP_S",
+        2.0,
+    )
     semantic_top_k = config_int("CANDIDATE_SEMANTIC_TOP_K", 2)
     semantic_scorer = None
 
@@ -276,6 +280,7 @@ def main():
             prompt_path=semantic_prompt_path,
             cache_dir=semantic_cache_dir,
             batch_size=semantic_batch_size,
+            min_frame_gap_s=semantic_min_frame_gap_s,
             top_k=semantic_top_k,
         )
 
@@ -320,6 +325,8 @@ def main():
         print("semantic_model:", semantic_scorer.model_id)
         print("semantic_prompts:", semantic_prompt_path)
         print("semantic_cache:", semantic_cache_dir)
+        print("semantic_batch_size:", semantic_batch_size)
+        print("semantic_min_frame_gap_s:", semantic_min_frame_gap_s)
 
     print("output:", index_path)
 
@@ -400,15 +407,49 @@ def main():
                 "  keyframe_embeddings:",
                 "cache" if semantic_scorer.last_cache_hit else "computed",
             )
+            print("  semantic_frames:", semantic_scorer.last_embedding_count)
+
+            if not semantic_scorer.last_cache_hit:
+                print(
+                    "  semantic_decoder:",
+                    semantic_scorer.encoder.last_decoder_mode,
+                )
+                print(
+                    "  demuxed_packets:",
+                    semantic_scorer.encoder.last_demuxed_packets,
+                )
+                print(
+                    "  decoded_keyframes:",
+                    semantic_scorer.encoder.last_decoded_keyframes,
+                )
+                print(
+                    "  support_packets_decoded:",
+                    semantic_scorer.encoder.last_support_packets_decoded,
+                )
+                print(
+                    "  decode_s: %0.2f" % semantic_scorer.encoder.last_decode_s
+                )
+                print(
+                    "  semantic_inference_s: %0.2f"
+                    % semantic_scorer.encoder.last_inference_s
+                )
 
     index_written = False
+    index_complete = len(indexed_video_ids) == len(records)
 
-    if all_rows:
+    if all_rows and index_complete:
         candidate_index.write_parquet_index(all_rows, index_path)
         index_written = True
 
         if requested_video_ids:
             print_top_candidates(all_rows)
+    elif all_rows:
+        print("")
+        print(
+            "Incomplete candidate index was not written: %d of %d videos failed."
+            % (len(failed_videos), len(records))
+        )
+        print("The existing index file was preserved.")
     else:
         print("")
         print("No valid candidate windows were produced; the existing index was preserved.")
@@ -417,6 +458,7 @@ def main():
         "index_version": candidate_index.INDEX_VERSION,
         "index_path": index_path,
         "index_written": index_written,
+        "index_complete": index_complete,
         "mapping_csv": mapping_csv,
         "clip_length_s": clip_length_s,
         "window_stride_s": window_stride_s,
@@ -433,6 +475,12 @@ def main():
         ),
         "semantic_cache_dir": (
             semantic_cache_dir if semantic_scorer is not None else None
+        ),
+        "semantic_batch_size": (
+            semantic_batch_size if semantic_scorer is not None else None
+        ),
+        "semantic_min_frame_gap_s": (
+            semantic_min_frame_gap_s if semantic_scorer is not None else None
         ),
         "videos_in_mapping": mapping_video_count,
         "videos_selected": len(records),
