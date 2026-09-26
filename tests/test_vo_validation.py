@@ -25,6 +25,8 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
 import ego_trajectory as ET  # noqa: E402
 
 FPS = 30.0

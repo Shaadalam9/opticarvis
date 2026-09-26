@@ -49,7 +49,12 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+# Stages run with src/ as their working directory.
+SRC_DIR = _paths.SRC_DIR
 
 from pipeline_common import (  # noqa: E402
     PROJECT_ROOT,
@@ -67,10 +72,6 @@ from pipeline_common import (  # noqa: E402
     normalise_path,
     transcode_h264,
 )
-
-# common.py and the config files are in the main opticarvis folder.
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 import common  # noqa: E402
 
@@ -245,7 +246,7 @@ MASTER_INDEX_JSONL = as_project_path(
 PIPELINE_SCRIPT = as_project_path(
     config_text_value(
         ["single_pipeline_script", "SINGLE_PIPELINE_SCRIPT", "PIPELINE_SCRIPT"],
-        os.path.join(SRC_DIR, "run_corrected_pipeline.py"),
+        _paths.script_path("run_corrected_pipeline.py"),
     )
 )
 
@@ -291,12 +292,11 @@ GATE_BATCH = config_bool_value("GATE_BATCH", True)
 BATCH_H264 = config_bool_value("BATCH_H264", True)
 
 # Estimate each clip's vanishing point/horizon before the planner sees it
-# (src/auto_calibrate.py).
+# (src/perception/auto_calibrate.py).
 AUTO_CALIBRATE = config_bool_value("AUTO_CALIBRATE", True)
 
 VIDEO_EXTENSIONS = config_list_value("VIDEO_EXTENSIONS", [".mp4", ".mkv", ".mov", ".avi"])
 DOWNLOAD_MISSING_SOURCE_VIDEOS = config_bool_value("DOWNLOAD_MISSING_SOURCE_VIDEOS", True)
-
 
 
 def reset_ftp_video_tmp_dir():
@@ -311,7 +311,6 @@ def atomic_video_download_path(filename_with_ext):
     tmp_path = os.path.join(FTP_VIDEO_TMP_DIR, filename_with_ext + ".part")
 
     return final_path, tmp_path
-
 
 
 DELETE_FTP_VIDEOS_AFTER_USE = config_bool_value(
@@ -774,8 +773,6 @@ def extract_clip(job):
     return True, "clip_extracted"
 
 
-
-
 def get_alpamayo_backend():
     backend = config_text_value("ALPAMAYO_BACKEND", "alpamayo_r1").lower()
 
@@ -1141,7 +1138,7 @@ def prepare_one_job(job, index, total):
     if AUTO_CALIBRATE and not os.path.isfile(calibration_json_for(job)):
         env = job_environment(job)
         subprocess.run(
-            [sys.executable, os.path.join(SRC_DIR, "auto_calibrate.py"), job["clip_video"]],
+            [sys.executable, _paths.script_path("auto_calibrate.py"), job["clip_video"]],
             cwd=SRC_DIR,
             env=env,
         )
@@ -1155,7 +1152,6 @@ def calibration_json_for(job):
         os.path.join(WORKFLOW_OUTPUTS, "calibration",
                      clip_tag(job) + "_camera_calibration.json")
     )
-
 
 
 def cleanup_rejected_candidate(job):
@@ -1346,7 +1342,7 @@ def gate_decisions_for_jobs(jobs, start_index):
 
     command = [
         sys.executable,
-        os.path.join(SRC_DIR, "gemma_gate_batch.py"),
+        _paths.script_path("gemma_gate_batch.py"),
         "--jobs-jsonl",
         jobs_path,
     ]
@@ -1450,7 +1446,7 @@ def cleanup_downloaded_sources_final(referenced_sources):
     """End-of-run sweep for recorded downloads this batch no longer needs.
 
     referenced_sources: sources jobs OUTSIDE this invocation's slice may still
-    need (main.py chunking, start_index) -- those stay, and stay on record so a
+    need (scripts/run_batch_jobs.py chunking, start_index) -- those stay, and stay on record so a
     later invocation reclaims them.
     """
     if not DELETE_FTP_VIDEOS_AFTER_USE:
@@ -1509,7 +1505,7 @@ def main():
     max_rounds = max((len(group) for _, group in city_groups), default=0)
 
     # Sources that jobs OUTSIDE this slice reference must survive the cleanup
-    # sweep: main.py chunking and start_index can split the job list, and a
+    # sweep: scripts/run_batch_jobs.py chunking and start_index can split the job list, and a
     # chunk boundary can even split one city's windows -- warn about that,
     # since the later invocation cannot know this one already rendered the city
     # except through the render-credit check below.
@@ -1549,7 +1545,8 @@ def main():
         if MAX_CONSECUTIVE_FAILURES and consecutive_failures[0] >= MAX_CONSECUTIVE_FAILURES:
             print("")
             print("%d consecutive failures with no success in between -- this "
-                  "looks systemic, not per-clip. Stopping. Raise or disable MAX_CONSECUTIVE_FAILURES in config to override."
+                  "looks systemic, not per-clip. Stopping. Raise or disable "
+                  "MAX_CONSECUTIVE_FAILURES in config to override."
                   % consecutive_failures[0])
             raise SystemExit(2)
 
@@ -1684,7 +1681,7 @@ def main():
     print("Master index:", MASTER_INDEX_JSONL)
 
     # Non zero only when every genuinely attempted window outright failed --
-    # intentional skips do not count. main.py drives the chunks with check=True,
+    # intentional skips do not count. scripts/run_batch_jobs.py drives the chunks with check=True,
     # so exiting non zero on a partial batch would abort every later chunk --
     # reintroducing at the chunk level exactly the failure this change removes
     # at the job level. A batch the gate declined in full is not an error.

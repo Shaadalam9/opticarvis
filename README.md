@@ -111,8 +111,8 @@ monocular depth aligned to the road plane.
 flowchart TD
     A[Dashcam clip] --> B[src/alpamayo_stream.py<br/>per-timestep planner output]
     B --> C[src/gemma_gate_timeline.py<br/>VLM: explain, or stay clean?]
-    A --> D[src/ego_trajectory.py<br/>future-frame visual odometry<br/>optional, for turns]
-    D --> G[src/future_anchor.py<br/>homography chain to future frames<br/>anchors the path on the road]
+    A --> D[src/trajectory/ego_trajectory.py<br/>future-frame visual odometry<br/>optional, for turns]
+    D --> G[src/trajectory/future_anchor.py<br/>homography chain to future frames<br/>anchors the path on the road]
     A --> E[final_preview_renderer.py]
     C -->|gate timeline| E
     D -->|future path| E
@@ -221,7 +221,7 @@ Per-frame fallback ladder, top wins:
 ## Choosing the cities
 
 Which cities get filmed is a sampling decision, not a curation one, and
-`src/city_sampler.py` makes it one: cities are drawn with the Local Pivotal
+`scripts/city_sampler.py` makes it one: cities are drawn with the Local Pivotal
 Method at probability proportional to population, so the sample spreads over
 the inhabited world, large countries get several cities without a
 one-per-country rule, and every selected city carries a design weight that
@@ -233,7 +233,7 @@ this study, then extracted so it is useful and citable on its own. It is a
 normal pinned dependency here.
 
 ```bash
-.venv/bin/python src/city_sampler.py --frame cities.csv --n 150 --seed 20260818 \
+.venv/bin/python scripts/city_sampler.py --frame cities.csv --n 150 --seed 20260818 \
     --alpha 0.75 --footage-column footage_hours --min-footage-hours 1.0
 ```
 
@@ -244,7 +244,7 @@ Full rationale, references and the traps (eligibility must filter the frame
 ## Models used
 
 Every checkpoint is named in one place — the **Models** block of
-`src/pipeline_common.py` — and every one is environment-overridable, so swapping a
+`src/core/pipeline_common.py` — and every one is environment-overridable, so swapping a
 model never means editing the module that loads it.
 
 | Purpose | Default model | Override |
@@ -262,7 +262,7 @@ never stalled by Hub metadata calls. On a machine that has not cached them yet, 
 `OPTICARVIS_HF_LOCAL_FILES_ONLY=0` for the first run.
 
 Swapping `OPTICARVIS_ROAD_SEG_MODEL` for a checkpoint trained on a different label
-map also means retuning `ROAD_LABEL_IDS` in `src/scene_models.py` — the default
+map also means retuning `ROAD_LABEL_IDS` in `src/perception/scene_models.py` — the default
 `(0,)` is the Cityscapes road class.
 
 ### Swapping the planner model
@@ -373,7 +373,19 @@ Three directories are **gitignored and not present after cloning**:
 
 ```
 opticarvis/
-    src/                  pipeline code (tracked)
+    main.py               the entry point (staged per-city study search)
+    src/                  pipeline code (tracked), one folder per stage:
+        core/             shared paths, config, logging
+        candidates/       semantic candidate index + job builder
+        selection/        per-city segment selection
+        batch/            batch runner + single-job pipeline
+        gate/             Alpamayo context, Gemma gate, MIRAGE planner
+        perception/       road seg, depth, lanes, auto-calibration
+        trajectory/       visual odometry + future anchors
+        render/           the renderer
+    scripts/              setup/maintenance tools (setup_assets, prefetch, run_batch_jobs, city_sampler)
+    mobility_study/       the separate mobility-study prototype (policy_demo)
+    study_service/        preference study backend
     videos/               source dashcam videos          <- you provide
     mapping.csv           clip index (tracked)
     external/             upstream checkouts             <- you clone, see below
@@ -438,7 +450,7 @@ keeps the ribbon straight ahead in the lane.
 The study preparation workflow has one public entry point:
 
 ```powershell
-uv run python .\analysis.py
+uv run python .\main.py
 ```
 
 It creates the ignored output directories when absent, indexes any mapped videos
@@ -467,6 +479,9 @@ workflow_outputs/final_study_segments.json
 workflow_outputs/final_study_selection/analysis_summary.json
 ```
 
+To render every generated clip job in bulk instead (no per-city stopping, no
+study manifest), use `uv run python .\scripts\run_batch_jobs.py` (formerly `main.py`).
+
 The commands below are lower-level tools for diagnostics and individual renders.
 
 **Build the explanation-gate timeline**
@@ -484,7 +499,7 @@ python src/render_timeline_clip.py <clip.mp4> gate_timeline.json lanecenter
 **Render with turn following** — reconstruct the path first, then enable it:
 
 ```bash
-python src/ego_trajectory.py <clip.mp4> vo_traj.json 4.0
+python src/trajectory/ego_trajectory.py <clip.mp4> vo_traj.json 4.0
 ```
 
 ```bash
@@ -497,7 +512,7 @@ unset is ignored **with a warning**, rather than silently.
 **Tune the camera calibration** on a single still, with no video or models loaded:
 
 ```bash
-python src/final_preview_renderer.py --calibrate frame.jpg calib.png
+python src/render/final_preview_renderer.py --calibrate frame.jpg calib.png
 ```
 
 This draws the horizon, the vanishing point and metre distance ticks so `HORIZON_V`,
@@ -527,10 +542,10 @@ needs no code edits.
 | `OPTICARVIS_BATCH_H264` | `1` | Re-encode each rendered mp4v master as H.264 in place. `0` keeps the masters |
 | `OPTICARVIS_MAX_CONSECUTIVE_FAILURES` | `5` | Stop the batch after this many consecutive job failures with no success between (systemic-failure guard). `0` disables |
 | `OPTICARVIS_STOP_ON_JOB_FAILURE` | `0` | `1` stops the batch at the first failed job (debugging) |
-| `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry to `workflow_outputs/overlay_geometry/` during renders. Keep it on for `analysis.py`: the study selector only accepts a candidate whose geometry file exists |
+| `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry to `workflow_outputs/overlay_geometry/` during renders. Keep it on for `main.py`: the study selector only accepts a candidate whose geometry file exists |
 | `OPTICARVIS_RIBBON_SOURCE` | `perception` | `perception` shows where the vehicle will actually drive (lane centering + validated, calibrated VO) — the deliverable ribbon. `planner` draws Alpamayo's intended trajectory, world-anchored and advanced by real ego motion; on human-driven footage it visibly diverges from the driven road, so treat it as a labeled experimental condition |
 | `OPTICARVIS_PLANNER_LATERAL_SIGN` | `-1` | Alpamayo's ego frame is FLU (+y left); the renderer is right-positive. `-1` converts; changing it mirrors every planned turn |
-| `OPTICARVIS_AUTO_CALIBRATE` | `1` | Estimate each clip's vanishing point/horizon (`src/auto_calibrate.py`) before the planner, VO and renderer consume the camera constants. An untrusted estimate writes nothing and the defaults hold |
+| `OPTICARVIS_AUTO_CALIBRATE` | `1` | Estimate each clip's vanishing point/horizon (`src/perception/auto_calibrate.py`) before the planner, VO and renderer consume the camera constants. An untrusted estimate writes nothing and the defaults hold |
 | `OPTICARVIS_CALIBRATION_DIR` | `<workflow_outputs>/calibration` | Where the planner wrapper looks for per-clip calibration files (set for the adapter subprocess by the batch) |
 | `OPTICARVIS_CITY_LIMIT` | `100` | Cities read from `mapping.csv`. Note this truncates by FILE ORDER, so emitting extra rows "for headroom" turns a probability sample into "the first N rows of a file" — see [Choosing the cities](docs/CITY_SAMPLING.md) |
 | `OPTICARVIS_CITY_FOOTAGE_S` | `3600` | Secondary per-city budget. It accrues `STRIDE_S` per clip, not `CLIP_LENGTH_S`, so it is a poor way to ask for *n* clips — use `OPTICARVIS_CLIPS_PER_CITY` |
@@ -539,7 +554,7 @@ needs no code edits.
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |
 | `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
 | `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns. Same switch as config `USE_VO_TRAJECTORY` (the env var wins); it decides both whether the pipeline builds the VO/anchor tracks and whether the renderer uses them. `OPTICARVIS_FUTURE_ANCHOR`, `_LANE_CURVE` and `_EGO_LOOKAHEAD` likewise override `USE_FUTURE_ANCHOR`, `USE_LANE_CURVE` and `USE_EGO_LOOKAHEAD`; every other renderer key reads `OPTICARVIS_<KEY>` first |
-| `OPTICARVIS_FUTURE_ANCHOR` | `1` | Trace the driven path onto the actual street pixels by chaining ground homographies to the future frames (`src/future_anchor.py`, runs after the VO stage). `0` renders from the projected VO path instead. See [Anchoring the path](#anchoring-the-path-to-the-road) |
+| `OPTICARVIS_FUTURE_ANCHOR` | `1` | Trace the driven path onto the actual street pixels by chaining ground homographies to the future frames (`src/trajectory/future_anchor.py`, runs after the VO stage). `0` renders from the projected VO path instead. See [Anchoring the path](#anchoring-the-path-to-the-road) |
 | `OPTICARVIS_ANCHOR_REF_AHEAD_M` | `4.5` | Ground distance ahead of the camera whose fixed pixel is carried back from each future frame |
 | `OPTICARVIS_ANCHOR_KEYFRAME_STRIDE` | `8` | Frames per keyframe hop; longer hops mean fewer matrix compositions and less chain drift, at coarser sampling |
 | `OPTICARVIS_ANCHOR_MIN_INLIER_RATIO` | `0.5` | RANSAC inlier floor per hop. Below it the chain truncates rather than fabricating anchors |

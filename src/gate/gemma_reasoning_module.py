@@ -13,7 +13,13 @@ import os
 
 import cv2
 
-from pipeline_common import (
+import sys
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import (  # noqa: E402
     VIDEO_ID,
     SEGMENT_START_TIME_S,
     CLIP_VIDEO,
@@ -125,16 +131,27 @@ GEMMA_SYSTEM_PROMPT = (
     "frames. Your task is to decide whether THIS moment is a proper time to "
     "trigger a brief passenger facing visual explanation.\\n\\n"
     "DEFAULT DECISION: do_not_explain unless the moment passes the study rubric. "
-    "The goal is not to explain every normal traffic interaction. The goal is to identify moments where a passenger may genuinely benefit from a brief visual explanation. "
-    "Normal, legal, safe, or standard driving behaviour should remain do_not_explain when the cause is obvious and the overlay would add little value.\\n\\n"
-    "Study rubric: choose proper_time_to_explain=true only when the vehicle behaviour is noticeable, the reason may not be immediately clear to a passenger, and there is a clear visual target for the overlay. "
-    "Examples that may qualify include an occluded pedestrian, ambiguous yielding, unexpected slowing, a distant or hidden traffic light, a difficult merge, cross traffic, a route fork, or a lead vehicle causing a non obvious reaction. "
-    "Examples that should usually remain false include simple lane keeping, ordinary following, a fully visible speed bump, a visible traffic light with ordinary stopping, or continuing on a clear road.\\n\\n"
-    "Say proper_time_to_explain=true only when the following conditions are mostly satisfied; weak ordinary cases should stay false:\n"
+    "The goal is not to explain every normal traffic interaction. The goal is to identify moments "
+    "where a passenger may genuinely benefit from a brief visual explanation. "
+    "Normal, legal, safe, or standard driving behaviour should remain do_not_explain when the "
+    "cause is obvious and the overlay would add little value.\\n\\n"
+    "Study rubric: choose proper_time_to_explain=true only when the vehicle behaviour is "
+    "noticeable, the reason may not be immediately clear to a passenger, and there is a clear "
+    "visual target for the overlay. "
+    "Examples that may qualify include an occluded pedestrian, ambiguous yielding, unexpected "
+    "slowing, a distant or hidden traffic light, a difficult merge, cross traffic, a route fork, "
+    "or a lead vehicle causing a non obvious reaction. "
+    "Examples that should usually remain false include simple lane keeping, ordinary following, a "
+    "fully visible speed bump, a visible traffic light with ordinary stopping, or continuing on a "
+    "clear road.\\n\\n"
+    "Say proper_time_to_explain=true only when the following conditions are mostly satisfied; weak "
+    "ordinary cases should stay false:\n"
     "1. The vehicle behaviour may be noticeable or potentially confusing to the "
     "passenger.\\n"
-    "2. The reason for the behaviour is not fully obvious from ordinary visible traffic motion, or the passenger may plausibly wonder why the vehicle behaved this way now.\n"
-    "3. There is a specific object, road feature, area, or trajectory that can be highlighted without adding visual clutter. "
+    "2. The reason for the behaviour is not fully obvious from ordinary visible traffic motion, or "
+    "the passenger may plausibly wonder why the vehicle behaved this way now.\n"
+    "3. There is a specific object, road feature, area, or trajectory that can be highlighted "
+    "without adding visual clutter. "
     "or safety relevant cause, object, area, or risk in the scene.\\n"
     "4. The explanation would help the passenger understand why the vehicle is "
     "behaving this way now.\\n\\n"
@@ -552,9 +569,6 @@ def dry_run_gate(state, prompt):
         "selected_scene_frames": prompt.get("selected_scene_frames", []),
         "important_note": "Dry run fallback following the same conservative gate policy expected from real Gemma4.",
     }
-
-
-
 
 
 def apply_study_acceptance_policy(gate, state):

@@ -2,11 +2,11 @@
 
 Run from the repository root after source videos have been downloaded:
 
-    python src/build_candidate_index.py
+    python src/candidates/build_candidate_index.py
 
 Optional positional video ids limit a validation run:
 
-    python src/build_candidate_index.py 3ai7SUaPoHM
+    python src/candidates/build_candidate_index.py 3ai7SUaPoHM
 
 The command demuxes packets, decodes keyframes only, caches their SigLIP2
 embeddings, and ranks windows against policy-derived prompts. It does not build
@@ -20,14 +20,12 @@ import re
 import sys
 
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SRC_DIR)
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
 
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+SRC_DIR = _paths.SRC_DIR
+PROJECT_ROOT = _paths.PROJECT_ROOT
 
 import candidate_index  # noqa: E402
 import candidate_semantics  # noqa: E402

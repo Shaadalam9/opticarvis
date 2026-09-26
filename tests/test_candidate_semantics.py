@@ -14,7 +14,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SRC, ".."))
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-import candidate_semantics
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
+import candidate_semantics  # noqa: E402
 
 
 class FeatureOutput(object):

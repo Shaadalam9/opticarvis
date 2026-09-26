@@ -123,7 +123,7 @@ better trade for a study that also wants to say something about countries.
 ## Running it
 
 ```bash
-.venv/bin/python src/city_sampler.py \
+.venv/bin/python scripts/city_sampler.py \
     --frame path/to/cities.csv --n 150 --seed 20260818 --alpha 0.75 \
     --population-column population_locality \
     --footage-column footage_hours --min-footage-hours 1.0 \

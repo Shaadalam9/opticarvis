@@ -50,7 +50,7 @@ except ImportError as exc:
 # SETTINGS
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 INPUT_CSV = PROJECT_ROOT / "docs" / "mapping_original.csv"
 OUTPUT_DIR = PROJECT_ROOT / "lpm_city_sample"
 

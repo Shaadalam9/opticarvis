@@ -17,7 +17,7 @@ Later upgrade:
     Metric3D, ZoeDepth, or another selected model.
 
 Run from the repo root, in the project venv:
-    python src/depth_estimation_module.py
+    python src/perception/depth_estimation_module.py
 """
 
 import os
@@ -25,7 +25,13 @@ import os
 import cv2
 import numpy as np
 
-from pipeline_common import (
+import sys
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import (  # noqa: E402
     VIDEO_ID,
     SEGMENT_START_TIME_S,
     STATE_JSON,

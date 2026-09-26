@@ -8,7 +8,7 @@ a window the gate approves -- the reloads dwarf the decisions.
 
 This driver loads Gemma once and walks the job list:
 
-    <python> src/gemma_gate_batch.py --jobs-jsonl <jobs.jsonl>
+    <python> src/gate/gemma_gate_batch.py --jobs-jsonl <jobs.jsonl>
 
 Per job it runs the same two stages the per-job pipeline would (workflow_runner,
 then gemma_reasoning_module), by setting the job's environment and reloading
@@ -30,10 +30,11 @@ import os
 import sys
 
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
 
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+SRC_DIR = _paths.SRC_DIR
 
 
 # Job fields mapped into the environment the stage modules read. Mirrors

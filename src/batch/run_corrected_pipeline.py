@@ -16,7 +16,12 @@ import os
 import subprocess
 import sys
 
-from pipeline_common import (
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import (  # noqa: E402
     STATE_JSON,
     VIDEO_ID,
     SEGMENT_START_TIME_S,
@@ -29,11 +34,12 @@ from pipeline_common import (
 )
 
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+# Stages run with src/ as their working directory.
+SRC_DIR = _paths.SRC_DIR
 
 
 def run_step(script_name):
-    script_path = os.path.join(SRC_DIR, script_name)
+    script_path = _paths.script_path(script_name)
 
     if not os.path.isfile(script_path):
         print("Missing script:", script_path)
@@ -161,7 +167,7 @@ def main():
     # documented fallback is a straight in-lane ribbon, so a failed track must
     # not fail the job.
     if config_setting_bool("USE_VO_TRAJECTORY", False):
-        vo_script = os.path.join(SRC_DIR, "ego_trajectory.py")
+        vo_script = _paths.script_path("ego_trajectory.py")
         completed = subprocess.run([sys.executable, vo_script], cwd=SRC_DIR)
 
         if completed.returncode != 0:
@@ -173,7 +179,7 @@ def main():
             # track's ego poses, hence inside this branch. A failure only
             # costs the anchor precision: the renderer falls back to the
             # direct flat-ground projection of the same VO path.
-            anchor_script = os.path.join(SRC_DIR, "future_anchor.py")
+            anchor_script = _paths.script_path("future_anchor.py")
             completed = subprocess.run([sys.executable, anchor_script], cwd=SRC_DIR)
 
             if completed.returncode != 0:

@@ -1,8 +1,8 @@
 # Engineering notes — the measured decisions behind the ribbon
 
 This file records *why* the renderer is built the way it is, with the measurements
-that forced each decision. Read it before changing `src/final_preview_renderer.py`
-geometry or tracking, or `src/ego_trajectory.py`. Every rule here was paid for with a
+that forced each decision. Read it before changing `src/render/final_preview_renderer.py`
+geometry or tracking, or `src/trajectory/ego_trajectory.py`. Every rule here was paid for with a
 shipped defect; the figures are the evidence.
 
 The user-facing summary of these rules is the
@@ -67,7 +67,7 @@ state removes that.
 
 ### 3a. The lateral sign convention
 
-`src/ego_trajectory.py` integrates the path in the standard vehicle frame
+`src/trajectory/ego_trajectory.py` integrates the path in the standard vehicle frame
 (+yaw/+Y = **left**); the renderer's `project_ground_point` is
 **right-positive** (`LATERAL_SIGN = +1`). `future_trajectories` negates lateral
 on output and stamps `"lateral_convention": "right_positive"` into the track.

@@ -1,353 +1,515 @@
-﻿"""Main entry point for the OptiCarVis batch pipeline.
+r"""Run the complete OptiCarVis study preparation from one command.
 
-Usage:
-    python main.py
-    python main.py --rebuild-jobs
-    python main.py --only-build-jobs
-    python main.py 10 0
+This is the entry point of the repository (formerly ``analysis.py``) and the
+public entry point for the staged city search.  It is safe to run
+on a clean checkout with no ``videos`` or ``workflow_outputs`` directory and
+safe to rerun after interruption.  For every unresolved city it downloads one
+mapped source video, builds or extends the semantic candidate index, evaluates
+the ranked 30 second candidates, and repeats with the next mapped video until
+one valid rendered explanation is accepted or the city's mapping is exhausted.
 
-Default behaviour:
-    python main.py builds clip_jobs.jsonl if needed, then runs all pending
-    generated clip jobs. Jobs with existing completed results are skipped.
+Run from the repository root::
+
+    uv run python .\main.py
+
+Resuming versus starting over is controlled by ``always_analyse`` in
+``config`` (env override ``OPTICARVIS_ALWAYS_ANALYSE``):
+
+* ``false`` (default): resume. Accepted cities, rejected candidates, the
+  semantic index and a half-finished download round are all kept, and the run
+  continues from the next unfinished step.
+* ``true``: start from scratch. Every generated artefact under
+  ``workflow_outputs`` and ``alpamayo_outputs`` is deleted first (index, jobs,
+  gate decisions, planner output, renders, selection progress). Downloaded
+  source videos in ``videos`` are kept - they are inputs, not analysis.
+
+The specialised modules in ``src`` and ``scripts`` remain implementation
+modules.  Keeping them separate makes the expensive stages independently
+testable and resumable; users do not need to invoke them manually.
+``scripts/run_batch_jobs.py`` (the former ``main.py``) remains for running every
+generated clip job in bulk, without the per-city staged selection.
 """
+
+from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
-
-import common
-
-
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-SRC_DIR = os.path.join(PROJECT_ROOT, "src")
-WORKFLOW_OUTPUTS = os.path.join(PROJECT_ROOT, "workflow_outputs")
-
-CLIP_JOBS_JSONL = os.path.join(WORKFLOW_OUTPUTS, "clip_jobs.jsonl")
-PENDING_CLIP_JOBS_JSONL = os.path.join(WORKFLOW_OUTPUTS, "clip_jobs_pending.jsonl")
-
-CLIP_JOB_BUILDER = os.path.join(SRC_DIR, "clip_job_builder.py")
-BATCH_PIPELINE = os.path.join(SRC_DIR, "batch_corrected_pipeline.py")
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 
-def config_int(key, default):
-    value = common.get_configs(key)
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_DIR = PROJECT_ROOT / "src"
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+WORKFLOW_OUTPUTS = PROJECT_ROOT / "workflow_outputs"
+SELECTION_DIR = WORKFLOW_OUTPUTS / "final_study_selection"
+MAIN_INDEX_FILE = WORKFLOW_OUTPUTS / "candidate_index.parquet"
+MAIN_INDEX_SUMMARY = WORKFLOW_OUTPUTS / "candidate_index_summary.json"
+NEXT_STAGE_FILE = SELECTION_DIR / "next_video_stage.jsonl"
+PROGRESS_FILE = SELECTION_DIR / "selection_progress.json"
+FINAL_MANIFEST = WORKFLOW_OUTPUTS / "final_study_segments.json"
+ANALYSIS_SUMMARY = SELECTION_DIR / "analysis_summary.json"
 
-    if value is None:
+BUILD_INDEX_SCRIPT = SRC_DIR / "candidates" / "build_candidate_index.py"
+BUILD_JOBS_SCRIPT = SRC_DIR / "candidates" / "clip_job_builder.py"
+SELECT_SEGMENTS_SCRIPT = SRC_DIR / "selection" / "run_final_study_segment_selection.py"
+INDEX_STAGE_SCRIPT = SRC_DIR / "candidates" / "index_next_video_stage.py"
+PREFETCH_SCRIPT = SCRIPTS_DIR / "prefetch_source_videos.py"
+
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".avi")
+ANALYSIS_VERSION = 1
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if not path.is_file():
         return default
-
     try:
-        number = int(float(value))
-    except ValueError:
+        with path.open("r", encoding="utf-8-sig") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
         return default
 
-    if number <= 0:
-        return default
 
-    return number
-
-
-def ensure_workflow_outputs():
-    os.makedirs(WORKFLOW_OUTPUTS, exist_ok=True)
-
-
-def clip_jobs_missing():
-    if not os.path.exists(CLIP_JOBS_JSONL):
-        return True
-
-    if os.path.getsize(CLIP_JOBS_JSONL) == 0:
-        return True
-
-    return False
+def write_json_atomic(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(value, handle, indent=2, ensure_ascii=False, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary, path)
 
 
-def read_json(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def read_jsonl(path):
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
     rows = []
-
-    with open(path, "r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8-sig") as handle:
         for line in handle:
-            text = line.strip()
-
-            if text:
-                rows.append(json.loads(text))
-
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if isinstance(value, dict):
+                rows.append(value)
     return rows
 
 
-def write_jsonl(path, rows):
-    with open(path, "w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+def load_config() -> dict[str, Any]:
+    configured = PROJECT_ROOT / "config"
+    fallback = PROJECT_ROOT / "default.config"
+    path = configured if configured.is_file() else fallback
+    value = read_json(path, {})
+    return value if isinstance(value, dict) else {}
 
 
-def run_script(script_path, args=None, env_extra=None):
-    if args is None:
-        args = []
-
-    command = [sys.executable, script_path] + args
-
-    env = os.environ.copy()
-
-    if env_extra:
-        env.update(env_extra)
-
-    print()
-    print("=" * 70)
-    print("Running:", " ".join(command))
-    print("=" * 70)
-
-    subprocess.run(command, cwd=SRC_DIR, check=True, env=env)
+def project_path(value: Any, fallback: str) -> Path:
+    text = str(value or fallback).strip()
+    path = Path(text)
+    return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
-def format_start_tag(value):
-    number = float(value)
-
-    if abs(number - round(number)) < 0.000001:
-        return str(int(round(number)))
-
-    text = ("%.3f" % number).rstrip("0").rstrip(".")
-    text = text.replace("-", "m")
-    text = text.replace(".", "p")
-
-    return text
-
-
-def job_tag(job):
-    clip_video = str(job.get("clip_video", "")).strip()
-
-    if clip_video:
-        name = os.path.basename(clip_video)
-        stem, extension = os.path.splitext(name)
-
-        if extension.lower() == ".mp4":
-            clip_length = int(round(float(job.get("clip_length_s", 30))))
-            suffix = "_" + str(clip_length) + "s"
-
-            if stem.endswith(suffix):
-                return stem[: -len(suffix)]
-
-    return (
-        str(job.get("video_id"))
-        + "_"
-        + format_start_tag(job.get("segment_start_time_s", 0))
-    )
+CONFIG = load_config()
+VIDEO_ROOT = project_path(
+    CONFIG.get("videos"),
+    "videos",
+)
+ALPAMAYO_OUTPUTS = project_path(
+    CONFIG.get("alpamayo_outputs"),
+    "alpamayo_outputs",
+)
+# One candidate file for every stage: clip_job_builder.py writes it, the
+# selector reads it, and the batch indexes into it. All three are pointed at it
+# explicitly (child_environment) so they cannot drift apart again - they once
+# defaulted to different files and the first selection step always failed.
+JOBS_FILE = project_path(
+    CONFIG.get("clip_jobs_jsonl"),
+    "workflow_outputs/clip_jobs.jsonl",
+)
+JOBS_SUMMARY_FILE = project_path(
+    CONFIG.get("clip_jobs_summary_json"),
+    "workflow_outputs/clip_jobs_summary.json",
+)
 
 
-def state_json_for_job(job):
-    tag = job_tag(job)
-    return os.path.join(WORKFLOW_OUTPUTS, tag + "_workflow_state.json")
+def environment_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(minimum, value)
 
 
-def gate_json_for_job(job):
-    tag = job_tag(job)
-    return os.path.join(
-        WORKFLOW_OUTPUTS,
-        "gemma_reasoning",
-        tag + "_gemma_gate.json",
-    )
-
-
-def final_render_exists_for_job(job):
-    tag = job_tag(job)
-    final_dir = os.path.join(WORKFLOW_OUTPUTS, "final_renders")
-
-    if not os.path.isdir(final_dir):
+def config_flag(key: str, default: bool) -> bool:
+    """A boolean from OPTICARVIS_<KEY> or the config file."""
+    value = os.environ.get("OPTICARVIS_" + key.upper())
+    if value is None or not str(value).strip():
+        value = CONFIG.get(key, default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
         return False
+    return default
 
-    for name in os.listdir(final_dir):
-        lower_name = name.lower()
 
-        if not lower_name.endswith(".mp4"):
+def child_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.setdefault("OPTICARVIS_VIDEOS_DIR", str(VIDEO_ROOT))
+    # City names are not ASCII ("Hạ Long"); on Windows a piped or logged
+    # stdout is cp1252 and the first such print() kills the stage.
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
+    environment["OPTICARVIS_CLIP_JOBS_JSONL"] = str(JOBS_FILE)
+    environment["OPTICARVIS_CLIP_JOBS_SUMMARY_JSON"] = str(JOBS_SUMMARY_FILE)
+    environment["OPTICARVIS_NEXT_VIDEO_STAGE_JSONL"] = str(NEXT_STAGE_FILE)
+    return environment
+
+
+def run_step(
+    label: str,
+    command: list[str],
+    accepted_codes: tuple[int, ...] = (0,),
+) -> int:
+    print("")
+    print("=" * 80)
+    print(label)
+    print("=" * 80)
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        env=child_environment(),
+    )
+    if result.returncode not in accepted_codes:
+        raise SystemExit(
+            "%s failed with exit code %d. Rerunning main.py is safe."
+            % (label, result.returncode)
+        )
+    return result.returncode
+
+
+def is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def reset_generated_outputs() -> None:
+    """Delete every generated artefact so the analysis starts from scratch.
+
+    Only directories inside the repository are touched, and never one that is
+    or contains the source-video directory: re-downloading the corpus is not
+    part of re-running the analysis.
+    """
+    print("")
+    print("always_analyse is true: removing previous analysis outputs.")
+    for directory in (WORKFLOW_OUTPUTS, ALPAMAYO_OUTPUTS):
+        if not directory.exists():
             continue
+        if directory.resolve() == PROJECT_ROOT.resolve() or not is_within(directory, PROJECT_ROOT):
+            raise SystemExit(
+                "Refusing to delete %s: it is not a subdirectory of the repository."
+                % directory
+            )
+        if is_within(VIDEO_ROOT, directory):
+            raise SystemExit(
+                "Refusing to delete %s: it contains the source videos (%s)."
+                % (directory, VIDEO_ROOT)
+            )
+        print("  removing", directory)
+        shutil.rmtree(directory)
+    print("  kept source videos in", VIDEO_ROOT)
 
-        if not name.startswith(tag):
-            continue
 
-        path = os.path.join(final_dir, name)
-
-        if os.path.getsize(path) > 0:
-            return True
-
-    return False
+def ensure_layout() -> None:
+    VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+    WORKFLOW_OUTPUTS.mkdir(parents=True, exist_ok=True)
+    SELECTION_DIR.mkdir(parents=True, exist_ok=True)
+    ALPAMAYO_OUTPUTS.mkdir(parents=True, exist_ok=True)
 
 
-def output_video_exists(state):
-    outputs = state.get("outputs", {})
-
-    candidate_keys = [
-        "roadline_v3_final_preview_video",
-        "roadline_v3_final_preview_video_vehicles",
-        "clean_final_preview_video",
-        "final_preview_video",
+def validate_scripts() -> None:
+    required = [
+        BUILD_INDEX_SCRIPT,
+        BUILD_JOBS_SCRIPT,
+        SELECT_SEGMENTS_SCRIPT,
+        INDEX_STAGE_SCRIPT,
+        PREFETCH_SCRIPT,
+        PROJECT_ROOT / "mapping.csv",
     ]
-
-    for key in candidate_keys:
-        path = outputs.get(key)
-
-        if path and os.path.exists(path) and os.path.getsize(path) > 0:
-            return True
-
-    return False
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise SystemExit("Required files are missing:\n  " + "\n  ".join(missing))
 
 
-def processed_status(job):
-    state_json = state_json_for_job(job)
-
-    if final_render_exists_for_job(job):
-        return "final_render_exists"
-
-    if os.path.exists(state_json):
-        state = read_json(state_json)
-
-        current_stage = str(state.get("current_stage", "")).strip()
-        explanation = state.get("explanation", {})
-
-        if current_stage == "gemma_gate_no":
-            return "gemma_no_state_exists"
-
-        if explanation.get("needed") is False:
-            return "gemma_no_state_exists"
-
-        if output_video_exists(state):
-            return "final_render_exists"
-
-    gate_json = gate_json_for_job(job)
-
-    if os.path.exists(gate_json):
-        gate = read_json(gate_json)
-
-        if gate.get("proper_time_to_explain") is False:
-            return "gemma_no_gate_exists"
-
-        if gate.get("proper_time_to_explain") is True and final_render_exists_for_job(job):
-            return "final_render_exists"
-
-    return ""
+def stage_signature(rows: list[dict[str, Any]]) -> tuple[tuple[int, str], ...]:
+    signature = []
+    for row in rows:
+        try:
+            city_index = int(row.get("city_index"))
+        except (TypeError, ValueError):
+            continue
+        video_id = str(row.get("video_id", "")).strip()
+        if video_id:
+            signature.append((city_index, video_id))
+    return tuple(sorted(signature))
 
 
-def build_pending_jobs(all_jobs):
-    pending_jobs = []
-    skipped_counts = {}
+def video_is_present(video_id: str) -> bool:
+    return any((VIDEO_ROOT / (video_id + extension)).is_file() for extension in VIDEO_EXTENSIONS)
 
-    for job in all_jobs:
-        status = processed_status(job)
 
-        if status:
-            skipped_counts[status] = skipped_counts.get(status, 0) + 1
+def partition_stage_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    present = []
+    missing = []
+    for row in rows:
+        video_id = str(row.get("video_id", "")).strip()
+        if video_id and video_is_present(video_id):
+            present.append(row)
         else:
-            pending_jobs.append(job)
-
-    return pending_jobs, skipped_counts
-
-
-def print_skip_summary(total_jobs, pending_jobs, skipped_counts):
-    skipped_total = total_jobs - len(pending_jobs)
-
-    print()
-    print("Pending job summary")
-    print("===================")
-    print("total_jobs:", total_jobs)
-    print("already_processed:", skipped_total)
-    print("pending_jobs:", len(pending_jobs))
-
-    for key in sorted(skipped_counts):
-        print(key + ":", skipped_counts[key])
+            missing.append(row)
+    return present, missing
 
 
-def run_all_pending_jobs():
-    all_jobs = read_jsonl(CLIP_JOBS_JSONL)
-    pending_jobs, skipped_counts = build_pending_jobs(all_jobs)
-
-    print_skip_summary(len(all_jobs), pending_jobs, skipped_counts)
-
-    if not pending_jobs:
-        print()
-        print("No pending jobs. Everything already has completed results.")
+def record_unavailable_stage_rows(rows: list[dict[str, Any]]) -> None:
+    if not rows:
         return
+    progress = read_json(PROGRESS_FILE, {"attempts": [], "city_status": {}})
+    if not isinstance(progress, dict):
+        progress = {"attempts": [], "city_status": {}}
+    unavailable = progress.setdefault("unavailable_video_ids_by_city", {})
+    if not isinstance(unavailable, dict):
+        unavailable = {}
+        progress["unavailable_video_ids_by_city"] = unavailable
+    failures = progress.setdefault("video_download_failures", [])
+    if not isinstance(failures, list):
+        failures = []
+        progress["video_download_failures"] = failures
 
-    write_jsonl(PENDING_CLIP_JOBS_JSONL, pending_jobs)
-
-    # The batch reads OPTICARVIS_CLIP_JOBS_JSONL. Under the old name it ignored
-    # this list and applied the pending-list chunk indices to the full job
-    # list, re-running finished jobs and skipping pending ones.
-    env_extra = {
-        "OPTICARVIS_CLIP_JOBS_JSONL": PENDING_CLIP_JOBS_JSONL,
-    }
-
-    chunk_size = config_int("BATCH_CHUNK_SIZE", 5)
-
-    print()
-    print("Running pending jobs in chunks")
-    print("==============================")
-    print("chunk_size:", chunk_size)
-
-    start = 0
-
-    while start < len(pending_jobs):
-        end = min(start + chunk_size, len(pending_jobs))
-        current_count = end - start
-
-        print()
-        print("Pending chunk:", str(start + 1) + "-" + str(end), "of", len(pending_jobs))
-
-        run_script(
-            BATCH_PIPELINE,
-            [str(current_count), str(start)],
-            env_extra=env_extra,
+    for row in rows:
+        try:
+            city_index = str(int(row.get("city_index")))
+        except (TypeError, ValueError):
+            continue
+        video_id = str(row.get("video_id", "")).strip()
+        if not video_id:
+            continue
+        blocked = unavailable.setdefault(city_index, [])
+        if video_id not in blocked:
+            blocked.append(video_id)
+        failures.append(
+            {
+                "city_index": int(city_index),
+                "city": row.get("city", "Unknown"),
+                "country": row.get("country", "Unknown"),
+                "video_id": video_id,
+                "failed_at": utc_now(),
+            }
         )
 
-        start = end
+    progress["updated_at"] = utc_now()
+    write_json_atomic(PROGRESS_FILE, progress)
 
 
-def parse_args(argv):
-    rebuild_jobs = False
-    only_build_jobs = False
-    positional = []
+def initialise_candidate_index() -> None:
+    if MAIN_INDEX_FILE.is_file():
+        return
+    return_code = run_step(
+        "Initial semantic candidate index",
+        [sys.executable, str(BUILD_INDEX_SCRIPT)],
+        accepted_codes=(0, 1),
+    )
+    if MAIN_INDEX_FILE.is_file():
+        return
 
-    for value in argv:
-        if value == "--rebuild-jobs":
-            rebuild_jobs = True
-        elif value == "--only-build-jobs":
-            only_build_jobs = True
-        else:
-            positional.append(value)
+    summary = read_json(MAIN_INDEX_SUMMARY, {})
+    local_count = int(summary.get("videos_selected", 0) or 0)
+    failed = summary.get("failed_videos", [])
+    if return_code == 1 and local_count == 0:
+        print("No local mapped videos were found. The first FTP stage will be prepared.")
+        return
+    if failed:
+        raise SystemExit(
+            "The initial index failed for local videos. Fix the reported video "
+            "errors, then rerun main.py."
+        )
+    raise SystemExit("The initial candidate index was not created.")
 
-    return rebuild_jobs, only_build_jobs, positional
+
+def run_selection_cycle() -> None:
+    run_step(
+        "Build ranked 30 second city candidates",
+        [sys.executable, str(BUILD_JOBS_SCRIPT)],
+    )
+    run_step(
+        "Evaluate candidates and render accepted explanations",
+        [sys.executable, str(SELECT_SEGMENTS_SCRIPT)],
+    )
 
 
-def main():
-    rebuild_jobs, only_build_jobs, positional = parse_args(sys.argv[1:])
+def download_stage(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    workers = environment_int("OPTICARVIS_ANALYSIS_DOWNLOAD_WORKERS", 3, 1)
+    attempts = environment_int("OPTICARVIS_ANALYSIS_DOWNLOAD_ATTEMPTS", 2, 1)
+    present, missing = partition_stage_rows(rows)
 
-    ensure_workflow_outputs()
+    for attempt in range(1, attempts + 1):
+        if not missing:
+            break
+        print(
+            "Download attempt %d/%d for %d missing stage video(s)."
+            % (attempt, attempts, len(missing))
+        )
+        run_step(
+            "Download missing mapped videos",
+            [
+                sys.executable,
+                str(PREFETCH_SCRIPT),
+                "--jobs-jsonl",
+                str(NEXT_STAGE_FILE),
+                "--workers",
+                str(workers),
+            ],
+            accepted_codes=(0, 1),
+        )
+        present, missing = partition_stage_rows(rows)
 
-    if rebuild_jobs or clip_jobs_missing():
-        print("clip_jobs.jsonl is missing, empty, or rebuild was requested.")
-        run_script(CLIP_JOB_BUILDER)
+    return present, missing
+
+
+def index_downloaded_stage() -> None:
+    run_step(
+        "Index newly downloaded videos and extend the semantic index",
+        [sys.executable, str(INDEX_STAGE_SCRIPT)],
+    )
+
+
+def final_summary(rounds: int) -> dict[str, Any]:
+    manifest = read_json(FINAL_MANIFEST, {})
+    progress = read_json(PROGRESS_FILE, {})
+    jobs_summary = read_json(JOBS_SUMMARY_FILE, {})
+    segments = manifest.get("segments", []) if isinstance(manifest, dict) else []
+    statuses = progress.get("city_status", {}) if isinstance(progress, dict) else {}
+    expected = int(jobs_summary.get("cities", 0) or 0)
+    exhausted = [
+        int(city_index)
+        for city_index, status in statuses.items()
+        if status == "all_mapped_videos_exhausted"
+    ]
+    accepted = len(segments) if isinstance(segments, list) else 0
+    unresolved = max(0, expected - accepted - len(exhausted))
+    summary = {
+        "analysis_version": ANALYSIS_VERSION,
+        "completed_at": utc_now(),
+        "video_rounds": rounds,
+        "expected_cities": expected,
+        "accepted_cities": accepted,
+        "exhausted_cities": len(exhausted),
+        "exhausted_city_indices": sorted(exhausted),
+        "unresolved_cities": unresolved,
+        "manifest": str(FINAL_MANIFEST),
+        "segments": segments if isinstance(segments, list) else [],
+    }
+    write_json_atomic(ANALYSIS_SUMMARY, summary)
+    return summary
+
+
+def main() -> int:
+    validate_scripts()
+    ensure_layout()
+
+    print("OptiCarVis complete analysis")
+    print("============================")
+    print("analysis_version:", ANALYSIS_VERSION)
+    print("project_root:", PROJECT_ROOT)
+    print("video_root:", VIDEO_ROOT)
+    print("workflow_outputs:", WORKFLOW_OUTPUTS)
+
+    always_analyse = config_flag("always_analyse", False)
+    print("always_analyse:", always_analyse)
+    if always_analyse:
+        reset_generated_outputs()
+        ensure_layout()
+
+    initialise_candidate_index()
+
+    # A pending next-video stage means an earlier run stopped mid-round
+    # (while downloading, indexing or evaluating). Finish that round first:
+    # rebuilding jobs now would give its downloaded-but-unindexed videos
+    # unranked stride windows and mark them evaluated.
+    if read_jsonl(NEXT_STAGE_FILE):
+        print("")
+        print("Resuming the unfinished video round from", NEXT_STAGE_FILE)
     else:
-        print("clip_jobs.jsonl exists:", CLIP_JOBS_JSONL)
+        run_selection_cycle()
 
-    if only_build_jobs:
-        print("Only build jobs requested. Stopping here.")
-        return
+    max_rounds = environment_int("OPTICARVIS_ANALYSIS_MAX_VIDEO_ROUNDS", 0, 0)
+    rounds = 0
 
-    if positional:
-        if len(positional) == 1:
-            jobs_to_run = positional[0]
-            start_index = "0"
-        else:
-            jobs_to_run = positional[0]
-            start_index = positional[1]
+    while True:
+        stage_rows = read_jsonl(NEXT_STAGE_FILE)
+        if not stage_rows:
+            break
+        if max_rounds and rounds >= max_rounds:
+            print(
+                "Stopped at the configured video round limit (%d). "
+                "Rerun main.py to continue." % max_rounds
+            )
+            break
 
-        run_script(BATCH_PIPELINE, [jobs_to_run, start_index])
-        return
+        rounds += 1
+        before = stage_signature(stage_rows)
+        print("")
+        print("#" * 80)
+        print("VIDEO ROUND %d: %d unresolved city(ies)" % (rounds, len(stage_rows)))
+        print("#" * 80)
 
-    run_all_pending_jobs()
+        present, missing = download_stage(stage_rows)
+        if missing:
+            print(
+                "%d video(s) remained unavailable after all download attempts; "
+                "their cities will advance to the next mapped video."
+                % len(missing)
+            )
+            record_unavailable_stage_rows(missing)
+
+        if present:
+            index_downloaded_stage()
+
+        run_selection_cycle()
+        after_rows = read_jsonl(NEXT_STAGE_FILE)
+        after = stage_signature(after_rows)
+        if after and after == before:
+            raise SystemExit(
+                "The staged search made no progress. The current files were "
+                "preserved; inspect selection_progress.json and rerun."
+            )
+
+    summary = final_summary(rounds)
+    print("")
+    print("OptiCarVis analysis complete")
+    print("============================")
+    print("accepted cities:", summary["accepted_cities"])
+    print("mapped videos exhausted:", summary["exhausted_cities"])
+    print("still unresolved:", summary["unresolved_cities"])
+    print("final manifest:", FINAL_MANIFEST)
+    print("analysis summary:", ANALYSIS_SUMMARY)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nStopped by user. Rerun the same command to continue safely.")
+        raise SystemExit(130)

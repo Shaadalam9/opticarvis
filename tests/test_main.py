@@ -1,8 +1,9 @@
-"""Focused, model free tests for the single command analysis workflow."""
+"""Focused, model free tests for main.py, the single command analysis workflow."""
 
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -18,7 +19,12 @@ for path in (ROOT, SRC):
         sys.path.insert(0, str(path))
 
 
-analysis = importlib.import_module("analysis")
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
+
+_spec = importlib.util.spec_from_file_location("opticarvis_main", ROOT / "main.py")
+analysis = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(analysis)
 selector = importlib.import_module("run_final_study_segment_selection")
 stage_indexer = importlib.import_module("index_next_video_stage")
 
@@ -131,7 +137,7 @@ def test_always_analyse_refuses_to_delete_the_video_directory():
 def test_builder_selector_and_analysis_share_one_candidate_file():
     """The builder's output must be the file the selector reads.
 
-    They once defaulted to different files, so every fresh analysis.py run
+    They once defaulted to different files, so every fresh main.py run
     stopped at "Candidate file not found".
     """
     builder = importlib.import_module("clip_job_builder")

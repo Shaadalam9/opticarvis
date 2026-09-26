@@ -8,17 +8,23 @@ import math
 import os
 import re
 
-import common
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-from typing import Dict, Iterable, List, Optional, Tuple
+import sys
 
-import cv2
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-from tqdm import tqdm
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+import _paths  # noqa: E402,F401
+
+import common  # noqa: E402
+import requests  # noqa: E402
+from bs4 import BeautifulSoup  # noqa: E402
+from urllib.parse import urljoin, urlparse  # noqa: E402
+from typing import Dict, Iterable, List, Optional, Tuple  # noqa: E402
+
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 
 # =============================================================================
@@ -26,7 +32,7 @@ from tqdm import tqdm
 # =============================================================================
 
 # Project paths are read from the existing project config through common.py.
-# Do not read the config file directly here; keep this script consistent with main.py.
+# Do not read the config file directly here; keep this script consistent with scripts/run_batch_jobs.py.
 
 # Set these to restrict the search. Leave empty to search all mapped cities.
 ONLY_LOCALITIES: set[str] = set()
@@ -228,12 +234,12 @@ OUTPUT_DIR = os.path.join(common.get_configs("output_dir"), "mark_when_policy_de
 if EXTERNAL_SIGNAL_CSV and os.path.isabs(EXTERNAL_SIGNAL_CSV):
     EXTERNAL_SIGNAL_PATH = EXTERNAL_SIGNAL_CSV
 elif EXTERNAL_SIGNAL_CSV:
-    # Resolve against this file's folder so the default survives a move of the
-    # checkout. It previously named an absolute path outside the repo, which the
+    # Resolve against the repository root (this file is in mobility_study/) so
+    # the default survives a move of the checkout. It previously named an absolute path outside the repo, which the
     # consolidation into opticarvis/ left dangling - load_external_signals then
     # warned and every clip fell back to the proxy WHEN trigger.
     EXTERNAL_SIGNAL_PATH = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         EXTERNAL_SIGNAL_CSV,
     ).replace("\\", "/")
 else:

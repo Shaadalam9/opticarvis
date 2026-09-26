@@ -12,7 +12,9 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-import run_final_study_segment_selection as selector
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
+import run_final_study_segment_selection as selector  # noqa: E402
 
 
 def write_json(path, value):

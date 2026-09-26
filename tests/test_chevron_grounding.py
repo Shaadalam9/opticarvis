@@ -29,6 +29,8 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
 import final_preview_renderer as R  # noqa: E402
 
 
@@ -112,7 +114,7 @@ def test_phase_streams_marks_toward_viewer():
 
 def test_strokes_never_escape_the_band():
     """build_path_overlay must clip marks to the band polygon."""
-    with open(os.path.join(SRC, "final_preview_renderer.py"), encoding="utf-8") as handle:
+    with open(os.path.join(SRC, "render", "final_preview_renderer.py"), encoding="utf-8") as handle:
         source = handle.read()
 
     assert "cv2.bitwise_and(dash_cov, band_mask)" in source, (

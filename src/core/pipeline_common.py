@@ -73,7 +73,7 @@ def root_config():
     fresh clone even though default.config holds every key it needs.
     """
     if not _ROOT_CONFIG_CACHE:
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         loaded = {}
         for name in ("config", "default.config"):
             path = os.path.join(root, name)
@@ -315,7 +315,8 @@ HF_LOCAL_FILES_ONLY = env_bool("OPTICARVIS_HF_LOCAL_FILES_ONLY", True)
 # Project root and runtime paths
 # ---------------------------------------------------------------------------
 
-SRC_DIR = normalise_path(os.path.dirname(os.path.abspath(__file__)))
+# This file is src/core/pipeline_common.py; SRC_DIR is src/.
+SRC_DIR = normalise_path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_PROJECT_ROOT = normalise_path(os.path.dirname(SRC_DIR))
 
 PROJECT_ROOT = env_path("OPTICARVIS_PROJECT_ROOT", DEFAULT_PROJECT_ROOT)

@@ -16,7 +16,7 @@ It runs under the *planner's* interpreter, not the OptiCarVis venv, so it
 imports nothing from this repo. The batch runner sets cwd to the planner repo,
 so every path comes from argv and is made absolute.
 
-Output, one file per manifest row, matching what src/workflow_runner.py parses:
+Output, one file per manifest row, matching what src/gate/workflow_runner.py parses:
 
     <output-dir>/alpamayo_inference_output_<video_id>.json
     -> video_id, segment_start_time_s, clip_video, run_meta
@@ -51,7 +51,7 @@ THREE THINGS TO UNDERSTAND BEFORE TRUSTING THE OUTPUT
    "stationary" bin, so the model is told the car is stopped and will predict
    accordingly no matter what the video shows. A dashcam mp4 carries no
    egomotion, so this wrapper estimates it by planar visual odometry using the
-   same flat-ground calibration as src/ego_trajectory.py (metric because depth
+   same flat-ground calibration as src/trajectory/ego_trajectory.py (metric because depth
    comes from d = f*H/(v - horizon)). If estimation fails, the clip FAILS --
    it does not fall back to zeros unless you explicitly ask for that.
 
@@ -91,8 +91,8 @@ HISTORY_SPAN_S = (NUM_HISTORY_WAYPOINTS - 1) * HISTORY_DT_S  # 1.5 s
 # Trajectory head: 64 waypoints, 0.1 .. 6.4 s.
 NUM_WAYPOINTS = 64
 
-# Flat-ground pinhole calibration, kept in step with src/ego_trajectory.py and
-# src/final_preview_renderer.py. Retune all three together, never just one.
+# Flat-ground pinhole calibration, kept in step with src/trajectory/ego_trajectory.py and
+# src/render/final_preview_renderer.py. Retune all three together, never just one.
 #
 # These numbers are expressed in 1280x720 pixels (VANISH_U 636 ~ 1280/2), so
 # every VO frame is resized to the reference first. Applying them to a 4K frame
@@ -121,7 +121,7 @@ MIN_HISTORY_DISTANCE_M = 0.25
 
 
 def apply_calibration_for(video_tag):
-    """Adopt the per-clip camera calibration written by src/auto_calibrate.py.
+    """Adopt the per-clip camera calibration written by src/perception/auto_calibrate.py.
 
     The ego history handed to the planner comes from planar VO built on these
     constants; with the defaults on a mismatched rig the history acquires a
@@ -343,7 +343,7 @@ def build_extra(cot_text, meta_action="", answer=""):
 # ---------------------------------------------------------------------------
 # Ego history by planar visual odometry
 #
-# Same flat-ground model as src/ego_trajectory.py: a ground point at image row v
+# Same flat-ground model as src/trajectory/ego_trajectory.py: a ground point at image row v
 # lies at d = f*H/(v - horizon), so its vertical motion between frames gives a
 # metric forward step, and its horizontal motion minus the predicted
 # translational component gives yaw. Metric scale is what matters here, because
