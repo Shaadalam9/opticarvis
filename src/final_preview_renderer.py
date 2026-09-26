@@ -37,6 +37,10 @@ import math
 import os
 import sys
 
+import cv2
+import numpy as np
+from ultralytics import YOLO
+
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
@@ -47,7 +51,7 @@ if PROJECT_ROOT not in sys.path:
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from pipeline_common import config_setting, config_setting_bool
+from pipeline_common import config_setting, config_setting_bool  # noqa: E402
 
 
 def opticarvis_project_root():
@@ -88,12 +92,7 @@ def config_float_value(key, default):
         return float(default)
 
 
-
-import cv2
-import numpy as np
-from ultralytics import YOLO
-
-from pipeline_common import (
+from pipeline_common import (  # noqa: E402
     CLIP_VIDEO,
     STATE_JSON,
     YOLO_SEG_MODEL,
@@ -494,7 +493,6 @@ DIM_LUT = np.clip(
 ).astype(np.uint8)
 
 
-
 def load_render_config():
     config_path = resolve_project_path(
         config_value("RENDER_CONFIG", os.path.join("configs", "render_default.json"))
@@ -517,7 +515,6 @@ def load_render_config():
     config["render_config_loaded"] = True
 
     return config
-
 
 
 def expand_compact_bo_render_config(render_config):
@@ -692,7 +689,6 @@ def apply_render_config_to_globals(render_config):
     print("applied_constants:", applied)
 
     return applied
-
 
 
 def apply_calibration_overrides():

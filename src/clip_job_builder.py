@@ -16,8 +16,8 @@ if PROJECT_ROOT not in sys.path:
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-import common
-import candidate_index
+import common  # noqa: E402
+import candidate_index  # noqa: E402
 
 
 def normalise_path(path_value):
