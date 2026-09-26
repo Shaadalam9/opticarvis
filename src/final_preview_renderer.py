@@ -3106,9 +3106,9 @@ def render_video_timeline(timeline, ego_track=None, vo_track=None):
     on_frames = int((ramp > 0.001).sum())
     print("timeline: %d/%d frames show the overlay." % (on_frames, frame_count))
 
-    # Post-hoc restyling: dump the per-frame geometry the models produced, so
-    # src/restyle_render.py can re-composite any style without the models. On
-    # by default -- a batch that skips it forfeits cheap restyles forever.
+    # Dump the per-frame geometry the models produced (overlay_geometry_dump).
+    # On by default: run_final_study_segment_selection.py rejects any
+    # candidate without it.
     dump = None
 
     if config_bool_value("DUMP_GEOMETRY", True):
