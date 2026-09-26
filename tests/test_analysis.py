@@ -23,22 +23,25 @@ selector = importlib.import_module("run_final_study_segment_selection")
 stage_indexer = importlib.import_module("index_next_video_stage")
 
 
-def test_main_runs_download_index_and_selection_round():
-    names = [
-        "validate_scripts",
-        "ensure_layout",
-        "initialise_candidate_index",
-        "run_selection_cycle",
-        "read_jsonl",
-        "download_stage",
-        "index_downloaded_stage",
-        "final_summary",
-    ]
-    original = {name: getattr(analysis, name) for name in names}
+MAIN_STUBS = [
+    "validate_scripts",
+    "ensure_layout",
+    "initialise_candidate_index",
+    "run_selection_cycle",
+    "read_jsonl",
+    "download_stage",
+    "index_downloaded_stage",
+    "final_summary",
+]
+
+
+def run_main_with_stage_reads(stage_reads):
+    """Run analysis.main() with every expensive step stubbed; return the calls."""
+    original = {name: getattr(analysis, name) for name in MAIN_STUBS}
     original_limit = os.environ.pop("OPTICARVIS_ANALYSIS_MAX_VIDEO_ROUNDS", None)
+    original_always = os.environ.pop("OPTICARVIS_ALWAYS_ANALYSE", None)
+    os.environ["OPTICARVIS_ALWAYS_ANALYSE"] = "0"
     calls = []
-    stage = [{"city_index": 1, "video_id": "video_one"}]
-    stage_reads = [stage, [], []]
 
     try:
         analysis.validate_scripts = lambda: calls.append("validate")
@@ -53,21 +56,90 @@ def test_main_runs_download_index_and_selection_round():
             "exhausted_cities": 0,
             "unresolved_cities": 0,
         }
-
         assert analysis.main() == 0
-        assert calls == [
-            "validate",
-            "layout",
-            "initialise",
-            "select",
-            "index",
-            "select",
-        ]
     finally:
         for name, value in original.items():
             setattr(analysis, name, value)
+        os.environ.pop("OPTICARVIS_ALWAYS_ANALYSE", None)
         if original_limit is not None:
             os.environ["OPTICARVIS_ANALYSIS_MAX_VIDEO_ROUNDS"] = original_limit
+        if original_always is not None:
+            os.environ["OPTICARVIS_ALWAYS_ANALYSE"] = original_always
+
+    return calls
+
+
+def test_fresh_start_selects_then_runs_the_staged_round():
+    stage = [{"city_index": 1, "video_id": "video_one"}]
+    # no pending stage -> first selection writes one -> round -> nothing left
+    calls = run_main_with_stage_reads([[], stage, [], []])
+    assert calls == ["validate", "layout", "initialise", "select", "index", "select"]
+
+
+def test_resume_finishes_the_pending_round_before_rebuilding_jobs():
+    stage = [{"city_index": 1, "video_id": "video_one"}]
+    # an interrupted run left a stage behind: download/index it before selecting
+    calls = run_main_with_stage_reads([stage, stage, [], []])
+    assert calls == ["validate", "layout", "initialise", "index", "select"]
+
+
+def test_always_analyse_removes_outputs_but_keeps_videos():
+    names = ["PROJECT_ROOT", "WORKFLOW_OUTPUTS", "ALPAMAYO_OUTPUTS", "VIDEO_ROOT"]
+    original = {name: getattr(analysis, name) for name in names}
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        for name in ("workflow_outputs", "alpamayo_outputs", "videos"):
+            (root / name).mkdir()
+            (root / name / "artefact.bin").write_bytes(b"x")
+        try:
+            analysis.PROJECT_ROOT = root
+            analysis.WORKFLOW_OUTPUTS = root / "workflow_outputs"
+            analysis.ALPAMAYO_OUTPUTS = root / "alpamayo_outputs"
+            analysis.VIDEO_ROOT = root / "videos"
+            analysis.reset_generated_outputs()
+            assert not (root / "workflow_outputs").exists()
+            assert not (root / "alpamayo_outputs").exists()
+            assert (root / "videos" / "artefact.bin").is_file()
+        finally:
+            for name, value in original.items():
+                setattr(analysis, name, value)
+
+
+def test_always_analyse_refuses_to_delete_the_video_directory():
+    names = ["PROJECT_ROOT", "WORKFLOW_OUTPUTS", "ALPAMAYO_OUTPUTS", "VIDEO_ROOT"]
+    original = {name: getattr(analysis, name) for name in names}
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "workflow_outputs" / "videos").mkdir(parents=True)
+        try:
+            analysis.PROJECT_ROOT = root
+            analysis.WORKFLOW_OUTPUTS = root / "workflow_outputs"
+            analysis.ALPAMAYO_OUTPUTS = root / "alpamayo_outputs"
+            analysis.VIDEO_ROOT = root / "workflow_outputs" / "videos"
+            try:
+                analysis.reset_generated_outputs()
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("a directory holding the videos was deleted")
+            assert (root / "workflow_outputs" / "videos").is_dir()
+        finally:
+            for name, value in original.items():
+                setattr(analysis, name, value)
+
+
+def test_builder_selector_and_analysis_share_one_candidate_file():
+    """The builder's output must be the file the selector reads.
+
+    They once defaulted to different files, so every fresh analysis.py run
+    stopped at "Candidate file not found".
+    """
+    builder = importlib.import_module("clip_job_builder")
+    assert Path(builder.JOBS_JSONL).resolve() == selector.JOBS_FILE
+    assert Path(builder.SUMMARY_JSON).resolve() == selector.CANDIDATE_SUMMARY_FILE
+    assert analysis.JOBS_FILE == selector.JOBS_FILE
+    environment = analysis.child_environment()
+    assert environment["OPTICARVIS_CLIP_JOBS_JSONL"] == str(analysis.JOBS_FILE)
 
 
 def test_stage_partition_detects_downloaded_video():

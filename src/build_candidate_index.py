@@ -436,8 +436,15 @@ def main():
 
     index_written = False
     index_complete = len(indexed_video_ids) == len(records)
+    # The staged search (index_next_video_stage.py) indexes one fresh video per
+    # city; one undecodable download must not discard the other cities'
+    # windows. Videos missing from the index still get stride-fallback jobs in
+    # clip_job_builder.py, so a partial index loses ranking, not coverage.
+    allow_partial = os.environ.get(
+        "OPTICARVIS_CANDIDATE_INDEX_ALLOW_PARTIAL", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
 
-    if all_rows and index_complete:
+    if all_rows and (index_complete or allow_partial):
         candidate_index.write_parquet_index(all_rows, index_path)
         index_written = True
 

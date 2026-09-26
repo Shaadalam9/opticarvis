@@ -11,6 +11,17 @@ Run from the repository root::
 
     uv run python .\analysis.py
 
+Resuming versus starting over is controlled by ``always_analyse`` in
+``config`` (env override ``OPTICARVIS_ALWAYS_ANALYSE``):
+
+* ``false`` (default): resume. Accepted cities, rejected candidates, the
+  semantic index and a half-finished download round are all kept, and the run
+  continues from the next unfinished step.
+* ``true``: start from scratch. Every generated artefact under
+  ``workflow_outputs`` and ``alpamayo_outputs`` is deleted first (index, jobs,
+  gate decisions, planner output, renders, selection progress). Downloaded
+  source videos in ``videos`` are kept - they are inputs, not analysis.
+
 The specialised modules in ``src`` and ``scripts`` remain implementation
 modules.  Keeping them separate makes the expensive stages independently
 testable and resumable; users do not need to invoke them manually.
@@ -20,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -34,8 +46,6 @@ WORKFLOW_OUTPUTS = PROJECT_ROOT / "workflow_outputs"
 SELECTION_DIR = WORKFLOW_OUTPUTS / "final_study_selection"
 MAIN_INDEX_FILE = WORKFLOW_OUTPUTS / "candidate_index.parquet"
 MAIN_INDEX_SUMMARY = WORKFLOW_OUTPUTS / "candidate_index_summary.json"
-JOBS_FILE = SELECTION_DIR / "candidate_windows.jsonl"
-JOBS_SUMMARY_FILE = SELECTION_DIR / "candidate_windows_summary.json"
 NEXT_STAGE_FILE = SELECTION_DIR / "next_video_stage.jsonl"
 PROGRESS_FILE = SELECTION_DIR / "selection_progress.json"
 FINAL_MANIFEST = WORKFLOW_OUTPUTS / "final_study_segments.json"
@@ -111,6 +121,18 @@ ALPAMAYO_OUTPUTS = project_path(
     CONFIG.get("alpamayo_outputs"),
     "alpamayo_outputs",
 )
+# One candidate file for every stage: clip_job_builder.py writes it, the
+# selector reads it, and the batch indexes into it. All three are pointed at it
+# explicitly (child_environment) so they cannot drift apart again - they once
+# defaulted to different files and the first selection step always failed.
+JOBS_FILE = project_path(
+    CONFIG.get("clip_jobs_jsonl"),
+    "workflow_outputs/clip_jobs.jsonl",
+)
+JOBS_SUMMARY_FILE = project_path(
+    CONFIG.get("clip_jobs_summary_json"),
+    "workflow_outputs/clip_jobs_summary.json",
+)
 
 
 def environment_int(name: str, default: int, minimum: int = 0) -> int:
@@ -121,9 +143,30 @@ def environment_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
+def config_flag(key: str, default: bool) -> bool:
+    """A boolean from OPTICARVIS_<KEY> or the config file."""
+    value = os.environ.get("OPTICARVIS_" + key.upper())
+    if value is None or not str(value).strip():
+        value = CONFIG.get(key, default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
 def child_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment.setdefault("OPTICARVIS_VIDEOS_DIR", str(VIDEO_ROOT))
+    # City names are not ASCII ("Hạ Long"); on Windows a piped or logged
+    # stdout is cp1252 and the first such print() kills the stage.
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
+    environment["OPTICARVIS_CLIP_JOBS_JSONL"] = str(JOBS_FILE)
+    environment["OPTICARVIS_CLIP_JOBS_SUMMARY_JSON"] = str(JOBS_SUMMARY_FILE)
+    environment["OPTICARVIS_NEXT_VIDEO_STAGE_JSONL"] = str(NEXT_STAGE_FILE)
     return environment
 
 
@@ -147,6 +190,41 @@ def run_step(
             % (label, result.returncode)
         )
     return result.returncode
+
+
+def is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def reset_generated_outputs() -> None:
+    """Delete every generated artefact so the analysis starts from scratch.
+
+    Only directories inside the repository are touched, and never one that is
+    or contains the source-video directory: re-downloading the corpus is not
+    part of re-running the analysis.
+    """
+    print("")
+    print("always_analyse is true: removing previous analysis outputs.")
+    for directory in (WORKFLOW_OUTPUTS, ALPAMAYO_OUTPUTS):
+        if not directory.exists():
+            continue
+        if directory.resolve() == PROJECT_ROOT.resolve() or not is_within(directory, PROJECT_ROOT):
+            raise SystemExit(
+                "Refusing to delete %s: it is not a subdirectory of the repository."
+                % directory
+            )
+        if is_within(VIDEO_ROOT, directory):
+            raise SystemExit(
+                "Refusing to delete %s: it contains the source videos (%s)."
+                % (directory, VIDEO_ROOT)
+            )
+        print("  removing", directory)
+        shutil.rmtree(directory)
+    print("  kept source videos in", VIDEO_ROOT)
 
 
 def ensure_layout() -> None:
@@ -354,8 +432,23 @@ def main() -> int:
     print("video_root:", VIDEO_ROOT)
     print("workflow_outputs:", WORKFLOW_OUTPUTS)
 
+    always_analyse = config_flag("always_analyse", False)
+    print("always_analyse:", always_analyse)
+    if always_analyse:
+        reset_generated_outputs()
+        ensure_layout()
+
     initialise_candidate_index()
-    run_selection_cycle()
+
+    # A pending next-video stage means an earlier run stopped mid-round
+    # (while downloading, indexing or evaluating). Finish that round first:
+    # rebuilding jobs now would give its downloaded-but-unindexed videos
+    # unranked stride windows and mark them evaluated.
+    if read_jsonl(NEXT_STAGE_FILE):
+        print("")
+        print("Resuming the unfinished video round from", NEXT_STAGE_FILE)
+    else:
+        run_selection_cycle()
 
     max_rounds = environment_int("OPTICARVIS_ANALYSIS_MAX_VIDEO_ROUNDS", 0, 0)
     rounds = 0

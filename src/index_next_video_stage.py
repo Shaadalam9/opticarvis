@@ -95,15 +95,16 @@ def downloaded_video_ids(video_ids: list[str]) -> tuple[list[str], list[str]]:
     return present, missing
 
 
-def build_stage_index(video_ids: list[str]) -> None:
+def build_stage_index(video_ids: list[str]) -> bool:
     environment = os.environ.copy()
     environment["OPTICARVIS_CANDIDATE_INDEX_PARQUET"] = str(STAGE_INDEX_FILE)
+    environment["OPTICARVIS_CANDIDATE_INDEX_ALLOW_PARTIAL"] = "1"
+    if STAGE_INDEX_FILE.is_file():
+        # A stale stage file from an earlier round must never be merged again.
+        STAGE_INDEX_FILE.unlink()
     command = [sys.executable, str(BUILD_INDEX_SCRIPT), *video_ids]
     result = subprocess.run(command, cwd=PROJECT_ROOT, env=environment)
-    if result.returncode != 0 or not STAGE_INDEX_FILE.is_file():
-        raise SystemExit(
-            "The next stage index was incomplete. The main candidate index was preserved."
-        )
+    return result.returncode == 0 and STAGE_INDEX_FILE.is_file()
 
 
 def combine_index_frames(
@@ -201,7 +202,15 @@ def main() -> int:
         print("No downloaded stage videos are available to index.")
         return 1
 
-    build_stage_index(present)
+    if not build_stage_index(present):
+        # Every downloaded video failed to index. That costs ranking only:
+        # clip_job_builder.py gives unindexed local videos stride-fallback
+        # candidates, so the staged search can still evaluate them.
+        print("")
+        print("No stage video produced candidate windows; the main index was")
+        print("preserved and these videos will use stride-fallback candidates.")
+        return 0
+
     merged_videos, windows, events = merge_stage_index()
 
     print("")

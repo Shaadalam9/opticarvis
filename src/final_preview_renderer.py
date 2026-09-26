@@ -47,7 +47,7 @@ if PROJECT_ROOT not in sys.path:
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-import common
+from pipeline_common import config_setting, config_setting_bool
 
 
 def opticarvis_project_root():
@@ -70,40 +70,13 @@ def resolve_project_path(path_value):
 
 
 def config_value(key, default):
-    try:
-        configs = common.get_configs()
-        if isinstance(configs, dict) and key in configs:
-            value = configs[key]
-            if value is not None:
-                return value
-    except Exception:
-        pass
-
-    try:
-        value = common.get_configs(key)
-        if value is not None:
-            return value
-    except Exception:
-        pass
-
-    return default
+    # OPTICARVIS_<KEY> in the environment wins over the config file, matching
+    # run_corrected_pipeline.py's decision to build the VO/anchor tracks.
+    return config_setting(key, default)
 
 
 def config_bool_value(key, default):
-    value = config_value(key, default)
-
-    if isinstance(value, bool):
-        return value
-
-    text = str(value).strip().lower()
-
-    if text in ["1", "true", "yes", "y", "on"]:
-        return True
-
-    if text in ["0", "false", "no", "n", "off"]:
-        return False
-
-    return bool(default)
+    return config_setting_bool(key, default)
 
 
 def config_float_value(key, default):
@@ -3028,8 +3001,9 @@ def parse_vo_track(vo_track):
         return None
 
     if not USE_VO_TRAJECTORY:
-        print("WARNING: a VO track was supplied but OPTICARVIS_VO_TRAJECTORY is not set"
-              " -> ignoring it (VO turn shaping is off by default).")
+        print("WARNING: a VO track was supplied but USE_VO_TRAJECTORY is off"
+              " (config, or env OPTICARVIS_VO_TRAJECTORY) -> ignoring it"
+              " (VO turn shaping is off by default).")
         return None
 
     validation = vo_track.get("heading_validation") or {}

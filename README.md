@@ -446,9 +446,18 @@ already on disk, and prepares one next FTP video for every unresolved city.  It
 then downloads those videos, extends the semantic candidate index, evaluates the
 ranked 30 second windows, renders the first valid explanation, and repeats with
 the next mapped video for a city when all candidates fail.  Accepted cities are
-skipped on later rounds.  An interrupted run can be resumed with the same
-command because the candidate index, rejection history, and accepted manifest
-are written atomically.
+skipped on later rounds.
+
+`always_analyse` in `config` chooses between resuming and starting over
+(`OPTICARVIS_ALWAYS_ANALYSE=1` overrides it for one run):
+
+| `always_analyse` | Behaviour |
+|---|---|
+| `false` (default) | **Resume.** The candidate index, rejection history, accepted manifest and any half-finished download round are kept; the run continues from the next unfinished step. Interrupting and rerunning is safe because every record is written atomically |
+| `true` | **From scratch.** Deletes `workflow_outputs/` and `alpamayo_outputs/` (index, jobs, gate decisions, planner output, renders, progress) before starting. Downloaded source videos in `videos/` are kept |
+
+All stages read and write one candidate file, `clip_jobs_jsonl` in `config`
+(default `workflow_outputs/clip_jobs.jsonl`).
 
 The loop ends when every city has an accepted render or has exhausted all mapped
 videos.  Its final records are:
@@ -558,7 +567,7 @@ needs no code edits.
 | `OPTICARVIS_STRIDE_S` | `60` | Gap between successive clip starts within a city |
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |
 | `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
-| `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns |
+| `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns. Same switch as config `USE_VO_TRAJECTORY` (the env var wins); it decides both whether the pipeline builds the VO/anchor tracks and whether the renderer uses them. `OPTICARVIS_FUTURE_ANCHOR`, `_LANE_CURVE` and `_EGO_LOOKAHEAD` likewise override `USE_FUTURE_ANCHOR`, `USE_LANE_CURVE` and `USE_EGO_LOOKAHEAD`; every other renderer key reads `OPTICARVIS_<KEY>` first |
 | `OPTICARVIS_FUTURE_ANCHOR` | `1` | Trace the driven path onto the actual street pixels by chaining ground homographies to the future frames (`src/future_anchor.py`, runs after the VO stage). `0` renders from the projected VO path instead. See [Anchoring the path](#anchoring-the-path-to-the-road) |
 | `OPTICARVIS_ANCHOR_REF_AHEAD_M` | `4.5` | Ground distance ahead of the camera whose fixed pixel is carried back from each future frame |
 | `OPTICARVIS_ANCHOR_KEYFRAME_STRIDE` | `8` | Frames per keyframe hop; longer hops mean fewer matrix compositions and less chain drift, at coarser sampling |
