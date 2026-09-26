@@ -16,13 +16,19 @@ MIRAGE style categories used here:
     modified reality   -> alter visual emphasis of the causal region
 
 Run from the repo root, in the project venv:
-    python src/mirage_effect_planner.py
+    python src/gate/mirage_effect_planner.py
 """
 
 import json
 import os
 
-from pipeline_common import (
+import sys
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import (  # noqa: E402
     VIDEO_ID,
     SEGMENT_START_TIME_S,
     CLIP_VIDEO,

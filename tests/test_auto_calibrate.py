@@ -1,4 +1,4 @@
-r"""Guard the per-clip camera auto-calibration (src/auto_calibrate.py).
+r"""Guard the per-clip camera auto-calibration (src/perception/auto_calibrate.py).
 
 The estimator recovers the vanishing point from flow convergence; getting it
 wrong re-poisons three consumers at once (planner ego history, VO track,
@@ -22,6 +22,8 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
+
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
 
 import auto_calibrate as AC  # noqa: E402
 
@@ -68,7 +70,7 @@ def test_returns_none_on_textureless_frames():
 
 def test_untrusted_estimates_write_nothing():
     """The gates must refuse rather than write a bad calibration."""
-    with open(os.path.join(SRC, "auto_calibrate.py"), encoding="utf-8") as handle:
+    with open(os.path.join(SRC, "perception", "auto_calibrate.py"), encoding="utf-8") as handle:
         source = handle.read()
 
     assert "MIN_SAMPLES" in source and "MAX_IQR_U" in source
@@ -85,14 +87,14 @@ def test_all_three_consumers_read_the_same_file():
     root = os.path.join(SRC, "..")
     suffix = "_camera_calibration.json"
 
-    for rel in ("src/final_preview_renderer.py", "src/ego_trajectory.py",
+    for rel in ("src/render/final_preview_renderer.py", "src/trajectory/ego_trajectory.py",
                 "scripts/alpamayo2_super_wrapper.py"):
         with open(os.path.join(root, rel), encoding="utf-8") as handle:
             assert suffix in handle.read(), (
                 "%s no longer reads the per-clip calibration file" % rel
             )
 
-    with open(os.path.join(SRC, "batch_corrected_pipeline.py"), encoding="utf-8") as handle:
+    with open(os.path.join(SRC, "batch", "batch_corrected_pipeline.py"), encoding="utf-8") as handle:
         batch = handle.read()
 
     assert '"OPTICARVIS_AUTO_CALIBRATE", "1"' in batch, (

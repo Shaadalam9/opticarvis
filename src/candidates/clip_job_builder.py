@@ -7,14 +7,12 @@ import sys
 import warnings
 
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SRC_DIR)
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
 
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+SRC_DIR = _paths.SRC_DIR
+PROJECT_ROOT = _paths.PROJECT_ROOT
 
 import common  # noqa: E402
 import candidate_index  # noqa: E402

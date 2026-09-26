@@ -38,6 +38,8 @@ SRC_DIR = os.path.join(ROOT, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
 from pipeline_common import CANDIDATE_SEMANTIC_MODEL  # noqa: E402
 
 

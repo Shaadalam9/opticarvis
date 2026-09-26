@@ -23,10 +23,10 @@ Highlight selection is locked to track IDs and the boxes are smoothed over time 
 the overlay does not flicker.
 
 Run the full render, from the repo root in the project venv:
-    python src/final_preview_renderer.py
+    python src/render/final_preview_renderer.py
 
 Tune the camera scalars quickly on one still frame (no video, no tracking):
-    python src/final_preview_renderer.py --calibrate <input.jpg> <output.png>
+    python src/render/final_preview_renderer.py --calibrate <input.jpg> <output.png>
 The calibration overlay draws the horizon line, the vanishing point, and metre
 distance ticks so HORIZON_V / VANISH_U / CAM_FOCAL_PX / CAM_HEIGHT_M can be
 adjusted by eye.
@@ -42,14 +42,12 @@ import numpy as np
 from ultralytics import YOLO
 
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SRC_DIR)
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
 
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+SRC_DIR = _paths.SRC_DIR
+PROJECT_ROOT = _paths.PROJECT_ROOT
 
 from pipeline_common import config_setting, config_setting_bool  # noqa: E402
 

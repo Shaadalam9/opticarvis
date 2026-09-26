@@ -15,8 +15,14 @@ import time
 
 import numpy as np
 
-from pipeline_common import CANDIDATE_SEMANTIC_MODEL, HF_LOCAL_FILES_ONLY
-from candidate_index import normalise_intervals
+import sys
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import CANDIDATE_SEMANTIC_MODEL, HF_LOCAL_FILES_ONLY  # noqa: E402
+from candidate_index import normalise_intervals  # noqa: E402
 
 
 CACHE_VERSION = 3

@@ -9,7 +9,7 @@ fed to the Alpamayo planner, which then predicted a harder turn than the scene
 warranted. One constant, three symptoms. Across 100 cities of different rigs it
 varies clip by clip, so it is estimated per clip:
 
-    .venv/bin/python src/auto_calibrate.py [clip.mp4]
+    .venv/bin/python src/perception/auto_calibrate.py [clip.mp4]
 
 Writes workflow_outputs/calibration/<tag>_camera_calibration.json -- the file
 final_preview_renderer.apply_calibration_overrides() already reads -- with
@@ -31,10 +31,11 @@ import sys
 import cv2
 import numpy as np
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
 
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+SRC_DIR = _paths.SRC_DIR
 
 from pipeline_common import (  # noqa: E402
     CLIP_VIDEO,

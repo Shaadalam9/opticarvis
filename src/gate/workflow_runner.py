@@ -7,7 +7,14 @@ Gemma4 later decides whether this is a proper time to explain.
 
 import math
 
-from pipeline_common import (
+import os
+import sys
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import (  # noqa: E402
     VIDEO_ID,
     SEGMENT_START_TIME_S,
     CLIP_LENGTH_S,

@@ -35,6 +35,8 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
 
 def reload_with_env(module_name, env):
     """Import a module fresh under a temporary environment."""
@@ -65,7 +67,7 @@ def segment_start_env_name_written_by_batch():
     common.get_configs at import time, which sys.exit(1)s without a `config`
     file, and this test must run on a bare checkout.
     """
-    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+    path = os.path.join(SRC, "batch", "batch_corrected_pipeline.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -129,7 +131,7 @@ def test_adapter_accepts_the_flags_the_batch_passes():
     interpreters, so a flag rename on either side only shows up as a failed
     batch after the model has already loaded.
     """
-    batch_path = os.path.join(SRC, "batch_corrected_pipeline.py")
+    batch_path = os.path.join(SRC, "batch", "batch_corrected_pipeline.py")
 
     with open(batch_path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -183,7 +185,7 @@ def test_one_failed_job_does_not_abort_the_batch():
     The regression is cheap to reintroduce and expensive to discover -- it costs
     a whole batch, hours in, and only on the clips that fail.
     """
-    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+    path = os.path.join(SRC, "batch", "batch_corrected_pipeline.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -220,7 +222,7 @@ def test_gate_provenance_is_derived_not_asserted():
     hardcoded gemma4_gate made every state file claim a decision the model never
     made, which is the field an analysis of explanation timing would trust.
     """
-    path = os.path.join(SRC, "gemma_reasoning_module.py")
+    path = os.path.join(SRC, "gate", "gemma_reasoning_module.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -238,7 +240,7 @@ def test_gate_provenance_is_derived_not_asserted():
 
 def test_gate_fallback_can_be_made_fatal():
     """A batch must be able to refuse the silent downgrade to the heuristic."""
-    path = os.path.join(SRC, "gemma_reasoning_module.py")
+    path = os.path.join(SRC, "gate", "gemma_reasoning_module.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -258,7 +260,7 @@ def test_declined_clip_is_not_counted_as_rendered():
     declines, so counting on the return code alone overstates what a batch
     produced.
     """
-    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+    path = os.path.join(SRC, "batch", "batch_corrected_pipeline.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -278,7 +280,7 @@ def test_declined_clip_is_not_counted_as_rendered():
 
 
 def batch_source():
-    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+    path = os.path.join(SRC, "batch", "batch_corrected_pipeline.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         return handle.read()
@@ -430,7 +432,7 @@ def test_planner_ribbon_negates_alpamayo_lateral():
     left curve. Consuming y unsigned mirrors every planned turn -- the exact
     failure ENGINEERING.md 3a documents for the VO path.
     """
-    path = os.path.join(SRC, "final_preview_renderer.py")
+    path = os.path.join(SRC, "render", "final_preview_renderer.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -456,11 +458,11 @@ def test_planner_ribbon_negates_alpamayo_lateral():
 def test_batch_exit_code_survives_a_partial_run():
     """main() may only exit non zero when nothing rendered at all.
 
-    main.py runs the chunks with check=True, so exiting non zero on a partial
+    scripts/run_batch_jobs.py runs the chunks with check=True, so exiting non zero on a partial
     batch would abort every later chunk and reintroduce the same failure one
     level up.
     """
-    path = os.path.join(SRC, "batch_corrected_pipeline.py")
+    path = os.path.join(SRC, "batch", "batch_corrected_pipeline.py")
 
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -470,7 +472,7 @@ def test_batch_exit_code_survives_a_partial_run():
     assert 'len(outcomes["failed"]) == genuinely_attempted' in body, (
         "main() must only fail the run when every genuinely attempted window "
         "failed; a partial batch, a fully skipped resume, or one the gate "
-        "declined in full, would otherwise abort later chunks under main.py"
+        "declined in full, would otherwise abort later chunks under scripts/run_batch_jobs.py"
     )
     assert 'attempted - len(outcomes["skipped"])' in body, (
         "intentional skips must not count towards the failure exit rule"

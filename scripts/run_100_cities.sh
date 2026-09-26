@@ -76,9 +76,9 @@ fi
 # batch does. OPTICARVIS_REUSE_CLIP_JOBS=1 keeps a hand-crafted list.
 if [ "${OPTICARVIS_REUSE_CLIP_JOBS:-0}" != "1" ] || [ ! -f workflow_outputs/clip_jobs.jsonl ]; then
     echo "Building clip jobs from mapping.csv..."
-    .venv/bin/python src/clip_job_builder.py
+    .venv/bin/python src/candidates/clip_job_builder.py
 fi
 
 # An empty argv[1] would break int(sys.argv[1]) in the batch runner, so only
 # forward the arguments that were actually given.
-exec .venv/bin/python src/batch_corrected_pipeline.py "$@"
+exec .venv/bin/python src/batch/batch_corrected_pipeline.py "$@"

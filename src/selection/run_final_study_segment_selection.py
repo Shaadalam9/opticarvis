@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 
-SRC_DIR = Path(__file__).resolve().parent
+SRC_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = SRC_DIR.parent
 WORKFLOW_OUTPUTS = PROJECT_ROOT / "workflow_outputs"
 SELECTION_DIR = WORKFLOW_OUTPUTS / "final_study_selection"
@@ -38,7 +38,7 @@ def configured_project_path(key: str, fallback: Path) -> Path:
 
     The candidate file must default to wherever clip_job_builder.py writes it
     (config ``clip_jobs_jsonl``); a separate hardcoded default here once made
-    every fresh analysis.py run stop with "Candidate file not found".
+    every fresh main.py run stop with "Candidate file not found".
     """
     for name in ("config", "default.config"):
         path = PROJECT_ROOT / name
@@ -91,7 +91,7 @@ NEXT_VIDEO_STAGE_FILE = Path(
         SELECTION_DIR / "next_video_stage.jsonl",
     )
 ).resolve()
-BATCH_PIPELINE = SRC_DIR / "batch_corrected_pipeline.py"
+BATCH_PIPELINE = SRC_DIR / "batch" / "batch_corrected_pipeline.py"
 FINAL_RENDER_DIR = WORKFLOW_OUTPUTS / "final_renders"
 GEOMETRY_DIR = WORKFLOW_OUTPUTS / "overlay_geometry"
 GATE_DIR = WORKFLOW_OUTPUTS / "gemma_reasoning"

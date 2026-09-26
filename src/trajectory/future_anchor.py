@@ -46,7 +46,12 @@ import sys
 import cv2
 import numpy as np
 
-from pipeline_common import (
+
+# Make src/ and every src/<group>/ importable (see src/_paths.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths  # noqa: E402,F401
+
+from pipeline_common import (  # noqa: E402
     CLIP_VIDEO,
     ensure_dir,
     normalise_path,

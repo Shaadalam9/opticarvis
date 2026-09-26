@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-SRC_DIR = Path(__file__).resolve().parent
+SRC_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = SRC_DIR.parent
 WORKFLOW_OUTPUTS = PROJECT_ROOT / "workflow_outputs"
 SELECTION_DIR = WORKFLOW_OUTPUTS / "final_study_selection"
@@ -39,7 +39,7 @@ MAIN_SUMMARY_FILE = MAIN_INDEX_FILE.with_name(MAIN_INDEX_FILE.stem + "_summary.j
 STAGE_SUMMARY_FILE = STAGE_INDEX_FILE.with_name(
     STAGE_INDEX_FILE.stem + "_summary.json"
 )
-BUILD_INDEX_SCRIPT = SRC_DIR / "build_candidate_index.py"
+BUILD_INDEX_SCRIPT = SRC_DIR / "candidates" / "build_candidate_index.py"
 STAGE_INDEXER_VERSION = 2
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".avi")
 

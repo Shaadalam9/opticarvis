@@ -31,6 +31,8 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
 
 def fresh():
     """A renderer module with its constants back at reference values."""

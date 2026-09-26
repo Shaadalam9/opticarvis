@@ -29,7 +29,7 @@ dependencies = [
     "scikit-learn>=1.9.0",
     "accelerate>=1.14.0",
     "physical-ai-av>=0.2.2",
-    # Spatially balanced city selection (src/city_sampler.py). Developed here
+    # Spatially balanced city selection (scripts/city_sampler.py). Developed here
     # first, then extracted so it is usable — and citable — on its own:
     # github.com/M-Colley/lpm-sampling. Pinned to a tag; uv.lock records the
     # exact commit.

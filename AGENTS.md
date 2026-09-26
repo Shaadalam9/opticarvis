@@ -31,7 +31,7 @@ user-facing description; **this file is for you, the agent working on the code.*
   needs weights `culane_res34.pth` (~865 MB, gdown id
   `1AjnvAD3qmqt_dGPveZJsLZ1bOyWv62Yj`); override via `OPTICARVIS_UFLD_REPO` /
   `OPTICARVIS_UFLD_WEIGHTS`. Its training-only imports (nvidia-dali,
-  tensorboard) are stubbed in `src/scene_models.py: load_lane_instance_model` —
+  tensorboard) are stubbed in `src/perception/scene_models.py: load_lane_instance_model` —
   keep it that way.
 - Model weights (`*.pt`, `*.pth`) are **gitignored**; never commit them.
 - **VO forward speed is unrecoverable on the dense-traffic clips, and this is a
@@ -63,7 +63,7 @@ user-facing description; **this file is for you, the agent working on the code.*
   the mp4v master with a warning if missing).
 - The Gemma gate model is `google/gemma-4-E2B-it` — **E2B, not E4B**: E4B does
   not fit the 16 GB GPU.
-- **Every model id lives in the `Models` block of `src/pipeline_common.py`** and
+- **Every model id lives in the `Models` block of `src/core/pipeline_common.py`** and
   is env-overridable. Do not hardcode a checkpoint in the module that loads it;
   add it there instead. The planner is a *subprocess*, so its interpreter
   (`OPTICARVIS_ALPAMAYO_PYTHON`), checkpoint (`OPTICARVIS_ALPAMAYO_MODEL`) and
@@ -77,11 +77,27 @@ user-facing description; **this file is for you, the agent working on the code.*
 ## Repo layout
 
 ```
-src/        the AV visualisation pipeline (run scripts from here: `python src/<script>.py`,
-            which puts src/ on sys.path so the flat intra-pipeline imports resolve)
-docs/       README figures + ENGINEERING.md
-*.py (root) the separate mobility-study code (policy_demo, common, logmod, ...) - it
-            resolves `config`/`secret` next to itself, so it must stay at the root
+main.py             THE ENTRY POINT - the staged per-city study search
+                    (`uv run python .\main.py`; formerly analysis.py). The only .py at the root
+config, default.config, secret, default.secret, mapping.csv   run configuration (root)
+
+src/                the AV visualisation pipeline, one folder per stage:
+  _paths.py           puts src/ and every group on sys.path; script_path(name) finds a stage
+  core/               pipeline_common (paths, env, Models block), common (config/secret),
+                      custom_logger, logmod
+  candidates/         semantic candidate index + ranked 30 s job builder
+  selection/          per-city segment selection (writes the study manifest)
+  batch/              batch runner, single-job pipeline, Alpamayo2-Super adapter
+  gate/               Alpamayo context, Gemma gate, MIRAGE effect planner
+  perception/         road seg, depth, lanes (scene_models), per-clip auto-calibration
+  trajectory/         visual odometry + future-anchor homography chains
+  render/             the renderer + per-frame geometry dump
+scripts/            setup/maintenance tools: setup_assets, prefetch_source_videos,
+                    run_batch_jobs (bulk driver, formerly main.py), city_sampler,
+                    alpamayo2 preflight/wrapper, run_100_cities.sh
+mobility_study/     the separate mobility-study prototype (policy_demo, its helpers)
+study_service/      pairwise preference study backend (Cloud Run + Firebase)
+tests/  docs/  configs/
 
 external/           gitignored upstream checkouts (alpamayo, oom-free-alpamayo, UFLDv2)
 videos/             gitignored source dashcam videos
@@ -89,7 +105,14 @@ alpamayo_outputs/   gitignored: extracted clips + planner JSON (created by the p
 workflow_outputs/   gitignored: renders, timelines, state (created by the pipeline)
 ```
 
-Every path resolves from `PROJECT_ROOT`, which `src/pipeline_common.py` derives
+Modules still import each other by bare name (`from pipeline_common import ...`)
+and run as plain scripts (`python src/render/final_preview_renderer.py`). Every
+script that imports a sibling starts by putting `src/` on `sys.path` and
+`import _paths`; a new module must do the same, and a new group folder must be
+added to `_paths.GROUPS`. Launch stages with `_paths.script_path("<file>.py")`,
+never a hardcoded folder. Stages run with `src/` as their working directory.
+
+Every path resolves from `PROJECT_ROOT`, which `src/core/pipeline_common.py` derives
 from its own `__file__` — **never reintroduce an absolute local path**. Each
 directory above has an `OPTICARVIS_*` override; see the README Configuration table.
 
@@ -97,16 +120,18 @@ directory above has an `OPTICARVIS_*` override; see the README Configuration tab
 
 | File | Role |
 |---|---|
-| `src/final_preview_renderer.py` | The renderer: ribbon geometry, lane-anchor tracking, VO blend, chevrons, compositing, both render loops |
-| `src/render_timeline_clip.py` | **The CLI entry point for renders** (derives output names, transcodes, records workflow state) |
-| `src/scene_models.py` | Lazy models: SegFormer road seg, Depth Anything V2, UFLDv2 lane instances, YOLOP (legacy) |
-| `src/ego_trajectory.py` | Future-frame visual odometry → per-frame future path JSON (the metric curvature source; also supplies the anchors' arclength) |
-| `src/future_anchor.py` | Chains ground-plane homographies to the future frames → per-frame polylines of the street pixels the car will drive over. Highest-precedence ribbon source; the only one that survives real turns |
-| `src/ego_motion.py` | Legacy phase-correlation pan track; feeds the disabled look-ahead only |
-| `src/gemma_gate_timeline.py`, `src/gemma_reasoning_module.py` | Sliding-window VLM gate → timeline JSON |
-| `src/alpamayo_stream.py` | Simulated per-timestep planner output feeding the gate |
-| `src/pipeline_common.py` | Paths, env-overridable clip selection, `transcode_h264`, `clip_stem` |
-| `src/city_sampler.py` | Which cities to film: frame eligibility, probabilities proportional to population, diagnostics, the design-weight manifest. The sampler itself is the external [`lpm-sampling`](https://github.com/M-Colley/lpm-sampling) package (extracted from this repo), pinned by tag in `pyproject.toml` |
+| `main.py` | **The entry point.** Staged per-city search: index → build jobs → evaluate/render → download the next video per unresolved city, until each city has one accepted render. `always_analyse` in config chooses resume vs from-scratch |
+| `scripts/run_batch_jobs.py` | Bulk driver: renders every pending job in chunks, no per-city stopping or study manifest |
+| `src/candidates/clip_job_builder.py` | Ranked 30 s candidate jobs per city from the semantic index (stride fallback for unindexed videos) |
+| `src/selection/run_final_study_segment_selection.py` | Tries each city's candidates in order, accepts the first valid render, stages the next video otherwise |
+| `src/batch/batch_corrected_pipeline.py` | Per-job driver: download/extract, calibrate, planner, gate, then `run_corrected_pipeline.py` |
+| `src/render/final_preview_renderer.py` | The renderer: ribbon geometry, lane-anchor tracking, VO blend, chevrons, compositing |
+| `src/perception/scene_models.py` | Lazy models: SegFormer road seg, Depth Anything V2, UFLDv2 lane instances, YOLOP (legacy) |
+| `src/trajectory/ego_trajectory.py` | Future-frame visual odometry → per-frame future path JSON (the metric curvature source; also supplies the anchors' arclength) |
+| `src/trajectory/future_anchor.py` | Chains ground-plane homographies to the future frames → per-frame polylines of the street pixels the car will drive over. Highest-precedence ribbon source; the only one that survives real turns |
+| `src/gate/gemma_reasoning_module.py`, `src/gate/gemma_gate_batch.py` | Gemma gate: decides whether a clip is a proper time to explain |
+| `src/core/pipeline_common.py` | Paths, env-overridable clip selection, render settings (`config_setting`), `transcode_h264`, `clip_stem` |
+| `scripts/city_sampler.py` | Which cities to film: frame eligibility, probabilities proportional to population, diagnostics, the design-weight manifest. The sampler itself is the external [`lpm-sampling`](https://github.com/M-Colley/lpm-sampling) package (extracted from this repo), pinned by tag in `pyproject.toml` |
 | `docs/ENGINEERING.md` | Measured evidence behind every geometry/tracking decision |
 | `docs/CITY_SAMPLING.md` | Why the cities are drawn rather than picked, with references |
 
@@ -124,11 +149,11 @@ python src/gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag>
 
 # with turn following: build the VO track, then enable it
-python src/ego_trajectory.py <clip.mp4> vo_traj.json
+python src/trajectory/ego_trajectory.py <clip.mp4> vo_traj.json
 OPTICARVIS_VO_TRAJECTORY=1 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
 
 # anchored on the road (what the batch does): add the homography-chain pass
-python src/future_anchor.py <clip.mp4> vo_traj.json anchors.json
+python src/trajectory/future_anchor.py <clip.mp4> vo_traj.json anchors.json
 OPTICARVIS_VO_TRAJECTORY=1 OPTICARVIS_FUTURE_ANCHOR_JSON=anchors.json \
   python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
 ```
@@ -154,7 +179,7 @@ Tracking (§2):
 - A detection dropout is **no new information** — coast, never blend the target
   toward `VANISH_U`/any prior. Trust scales *gains*, not values.
 
-Future anchoring (`src/future_anchor.py`):
+Future anchoring (`src/trajectory/future_anchor.py`):
 - The anchors' placement must stay **model-free**. Their whole value is that they
   are found by image registration, so heading, calibration and slope errors cancel.
   Ground metres may parameterise the *drawing* (resampling, smoothing, rail

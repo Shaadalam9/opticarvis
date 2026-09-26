@@ -20,7 +20,9 @@ import subprocess
 import smtplib
 from email.message import EmailMessage
 
-root_dir = os.path.dirname(__file__)
+# The repository root (this file is src/core/common.py): config, secret,
+# _cache, _logs and _output all live there.
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 cache_dir = os.path.join(root_dir, '_cache')
 log_dir = os.path.join(root_dir, '_logs')
 output_dir = os.path.join(root_dir, '_output')

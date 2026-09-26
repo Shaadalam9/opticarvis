@@ -2,7 +2,7 @@
 
 batch_corrected_pipeline.py drives this backend with its own CLI:
 
-    <python> src/alpamayo2_super_adapter.py --jobs-jsonl <jobs.jsonl>
+    <python> src/batch/alpamayo2_super_adapter.py --jobs-jsonl <jobs.jsonl>
              --output-dir <dir> --model-id <hf-id> [extra args...]
 
 The inference itself is NOT reimplemented here. scripts/alpamayo2_super_wrapper.py
@@ -28,7 +28,7 @@ final path the renderer expects, so no copy step follows:
 
 Validate the plumbing without a GPU or the checkpoint:
 
-    python src/alpamayo2_super_adapter.py --jobs-jsonl j.jsonl --output-dir out \
+    python src/batch/alpamayo2_super_adapter.py --jobs-jsonl j.jsonl --output-dir out \
         --model-id nvidia/Alpamayo2-Super --self-test
 """
 
@@ -53,7 +53,7 @@ def load_wrapper():
     runner sets cwd to the project root, but nothing guarantees that.
     """
     here = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.normpath(os.path.join(here, "..", "scripts", "alpamayo2_super_wrapper.py"))
+    path = os.path.normpath(os.path.join(here, "..", "..", "scripts", "alpamayo2_super_wrapper.py"))
 
     if not os.path.isfile(path):
         print("Missing planner wrapper:", path)

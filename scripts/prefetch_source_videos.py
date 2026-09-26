@@ -24,6 +24,8 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
+import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
+
 try:
     import batch_corrected_pipeline as batch  # noqa: E402
 except SystemExit:
@@ -80,7 +82,7 @@ def main():
     args = parser.parse_args()
 
     if not os.path.isfile(args.jobs_jsonl):
-        print("No job list at %s -- run src/clip_job_builder.py first." % args.jobs_jsonl)
+        print("No job list at %s -- run src/candidates/clip_job_builder.py first." % args.jobs_jsonl)
         return 1
 
     present, missing = missing_video_ids(args.jobs_jsonl)
