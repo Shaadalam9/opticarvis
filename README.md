@@ -446,9 +446,18 @@ already on disk, and prepares one next FTP video for every unresolved city.  It
 then downloads those videos, extends the semantic candidate index, evaluates the
 ranked 30 second windows, renders the first valid explanation, and repeats with
 the next mapped video for a city when all candidates fail.  Accepted cities are
-skipped on later rounds.  An interrupted run can be resumed with the same
-command because the candidate index, rejection history, and accepted manifest
-are written atomically.
+skipped on later rounds.
+
+`always_analyse` in `config` chooses between resuming and starting over
+(`OPTICARVIS_ALWAYS_ANALYSE=1` overrides it for one run):
+
+| `always_analyse` | Behaviour |
+|---|---|
+| `false` (default) | **Resume.** The candidate index, rejection history, accepted manifest and any half-finished download round are kept; the run continues from the next unfinished step. Interrupting and rerunning is safe because every record is written atomically |
+| `true` | **From scratch.** Deletes `workflow_outputs/` and `alpamayo_outputs/` (index, jobs, gate decisions, planner output, renders, progress) before starting. Downloaded source videos in `videos/` are kept |
+
+All stages read and write one candidate file, `clip_jobs_jsonl` in `config`
+(default `workflow_outputs/clip_jobs.jsonl`).
 
 The loop ends when every city has an accepted render or has exhausted all mapped
 videos.  Its final records are:
@@ -494,35 +503,6 @@ python src/final_preview_renderer.py --calibrate frame.jpg calib.png
 This draws the horizon, the vanishing point and metre distance ticks so `HORIZON_V`,
 `VANISH_U`, `CAM_FOCAL_PX` and `CAM_HEIGHT_M` can be set by eye.
 
-### Restyling a render without re-rendering
-
-The cost of a render is the four models per frame, not the drawing — so the
-renderer dumps the geometry those models produced (per-frame ribbon centreline,
-selected detections, animation ramp, occlusion map) to
-`workflow_outputs/overlay_geometry/` while it renders (`OPTICARVIS_DUMP_GEOMETRY`,
-on by default). Any overlay style can then be re-composited from that in seconds
-on CPU:
-
-```bash
-python src/restyle_render.py \
-    --geometry workflow_outputs/overlay_geometry/<tag>_geometry.jsonl.gz \
-    --style styles/default.json
-```
-
-Styles are per-element JSON (`styles/default.json` reproduces the built-in
-look): colour, opacity, blur/feather, stroke widths and visibility for the
-ribbon, chevrons, pedestrians, vehicles, distance labels and the explanation
-panel — plus parameters that shape geometry derived from the centreline, such
-as the ribbon width and chevron spacing/speed. Pixel values are at the 1280x720
-calibration reference and scale with the clip exactly as the renderer's do.
-
-The compositor calls the renderer's own drawing functions with the style values
-substituted, so the default style reproduces the shipped look by construction.
-What it cannot change is anything the models or temporal trackers decided —
-which objects are highlighted, where the ribbon goes, when the overlay is on.
-That is the point: style variants from identical geometry are clean
-experimental conditions.
-
 ## Configuration
 
 Every path and clip selection is environment-overridable, so rendering a second clip
@@ -547,7 +527,7 @@ needs no code edits.
 | `OPTICARVIS_BATCH_H264` | `1` | Re-encode each rendered mp4v master as H.264 in place. `0` keeps the masters |
 | `OPTICARVIS_MAX_CONSECUTIVE_FAILURES` | `5` | Stop the batch after this many consecutive job failures with no success between (systemic-failure guard). `0` disables |
 | `OPTICARVIS_STOP_ON_JOB_FAILURE` | `0` | `1` stops the batch at the first failed job (debugging) |
-| `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry during renders for post-hoc restyling (`src/restyle_render.py`). `0` disables — and forfeits cheap restyles for those clips |
+| `OPTICARVIS_DUMP_GEOMETRY` | `1` | Dump per-frame overlay geometry to `workflow_outputs/overlay_geometry/` during renders. Keep it on for `analysis.py`: the study selector only accepts a candidate whose geometry file exists |
 | `OPTICARVIS_RIBBON_SOURCE` | `perception` | `perception` shows where the vehicle will actually drive (lane centering + validated, calibrated VO) — the deliverable ribbon. `planner` draws Alpamayo's intended trajectory, world-anchored and advanced by real ego motion; on human-driven footage it visibly diverges from the driven road, so treat it as a labeled experimental condition |
 | `OPTICARVIS_PLANNER_LATERAL_SIGN` | `-1` | Alpamayo's ego frame is FLU (+y left); the renderer is right-positive. `-1` converts; changing it mirrors every planned turn |
 | `OPTICARVIS_AUTO_CALIBRATE` | `1` | Estimate each clip's vanishing point/horizon (`src/auto_calibrate.py`) before the planner, VO and renderer consume the camera constants. An untrusted estimate writes nothing and the defaults hold |
@@ -558,7 +538,7 @@ needs no code edits.
 | `OPTICARVIS_STRIDE_S` | `60` | Gap between successive clip starts within a city |
 | `OPTICARVIS_LANE_SOURCE` | `ufldv2` | `ufldv2` (lane instances) or `yolop` (lane mask) |
 | `OPTICARVIS_LANE_CURVE` | `1` | `0` disables the lane-curve fit (ribbon stays straight-in-lane) |
-| `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns |
+| `OPTICARVIS_VO_TRAJECTORY` | `0` | `1` blends the VO path in through genuine turns. Same switch as config `USE_VO_TRAJECTORY` (the env var wins); it decides both whether the pipeline builds the VO/anchor tracks and whether the renderer uses them. `OPTICARVIS_FUTURE_ANCHOR`, `_LANE_CURVE` and `_EGO_LOOKAHEAD` likewise override `USE_FUTURE_ANCHOR`, `USE_LANE_CURVE` and `USE_EGO_LOOKAHEAD`; every other renderer key reads `OPTICARVIS_<KEY>` first |
 | `OPTICARVIS_FUTURE_ANCHOR` | `1` | Trace the driven path onto the actual street pixels by chaining ground homographies to the future frames (`src/future_anchor.py`, runs after the VO stage). `0` renders from the projected VO path instead. See [Anchoring the path](#anchoring-the-path-to-the-road) |
 | `OPTICARVIS_ANCHOR_REF_AHEAD_M` | `4.5` | Ground distance ahead of the camera whose fixed pixel is carried back from each future frame |
 | `OPTICARVIS_ANCHOR_KEYFRAME_STRIDE` | `8` | Frames per keyframe hop; longer hops mean fewer matrix compositions and less chain drift, at coarser sampling |

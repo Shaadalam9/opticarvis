@@ -51,6 +51,78 @@ def env_bool(name, default):
     return text in ("1", "true", "yes", "y", "on")
 
 
+# Render switches that were documented (README, AGENTS.md, run_100_cities.sh)
+# under a shorter env name than their config key. Each env name is honoured so
+# the stage that builds a track and the renderer that consumes it can never
+# disagree about whether it is on.
+SETTING_ENV_ALIASES = {
+    "USE_VO_TRAJECTORY": ("OPTICARVIS_VO_TRAJECTORY",),
+    "USE_FUTURE_ANCHOR": ("OPTICARVIS_FUTURE_ANCHOR",),
+    "USE_EGO_LOOKAHEAD": ("OPTICARVIS_EGO_LOOKAHEAD",),
+    "USE_LANE_CURVE": ("OPTICARVIS_LANE_CURVE",),
+}
+
+_ROOT_CONFIG_CACHE = []
+
+
+def root_config():
+    """The repo-root `config` file, else `default.config`, parsed once.
+
+    Read directly rather than through common.get_configs, which exits the
+    process when `config` is absent - that made the renderer unimportable on a
+    fresh clone even though default.config holds every key it needs.
+    """
+    if not _ROOT_CONFIG_CACHE:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        loaded = {}
+        for name in ("config", "default.config"):
+            path = os.path.join(root, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8-sig") as handle:
+                    value = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if isinstance(value, dict):
+                loaded = value
+                break
+        _ROOT_CONFIG_CACHE.append(loaded)
+
+    return _ROOT_CONFIG_CACHE[0]
+
+
+def config_setting(key, default):
+    """One render/pipeline switch: OPTICARVIS_<KEY> (or an alias), then config."""
+    names = ["OPTICARVIS_" + str(key).upper()]
+    names.extend(SETTING_ENV_ALIASES.get(str(key), ()))
+
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and str(value).strip() != "":
+            return value
+
+    value = root_config().get(key)
+    return default if value is None else value
+
+
+def config_setting_bool(key, default):
+    value = config_setting(key, default)
+
+    if isinstance(value, bool):
+        return value
+
+    text = str(value).strip().lower()
+
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+
+    return bool(default)
+
+
 def normalise_path(path):
     """Return a native path for the current operating system."""
     if path is None:

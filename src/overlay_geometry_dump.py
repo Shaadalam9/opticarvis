@@ -5,8 +5,10 @@ full re-render -- and the cost of a render is the four models per frame, not
 the drawing. This module lets final_preview_renderer.py dump, per frame, the
 geometry those models produced: the ribbon centreline, the selected detections
 (mask polygon, smoothed box, score, distance), the animation ramp and label,
-and the occlusion map. src/restyle_render.py then re-composites any style from
-that in seconds, with no GPU and no models.
+and the occlusion map, so a style can be re-composited from it with no GPU and
+no models (the restyle compositor was removed from this repo; the dump is
+still required, because the study selector only accepts a candidate whose
+geometry file exists).
 
 Artifacts, per clip:
     workflow_outputs/overlay_geometry/<tag>_geometry.jsonl.gz

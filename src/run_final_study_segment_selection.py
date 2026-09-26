@@ -32,16 +32,46 @@ PROJECT_ROOT = SRC_DIR.parent
 WORKFLOW_OUTPUTS = PROJECT_ROOT / "workflow_outputs"
 SELECTION_DIR = WORKFLOW_OUTPUTS / "final_study_selection"
 
+
+def configured_project_path(key: str, fallback: Path) -> Path:
+    """A path from the root config, resolved like clip_job_builder does.
+
+    The candidate file must default to wherever clip_job_builder.py writes it
+    (config ``clip_jobs_jsonl``); a separate hardcoded default here once made
+    every fresh analysis.py run stop with "Candidate file not found".
+    """
+    for name in ("config", "default.config"):
+        path = PROJECT_ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                value = json.load(handle).get(key)
+        except (OSError, ValueError, AttributeError):
+            continue
+        if value:
+            configured = Path(str(value).strip())
+            return configured if configured.is_absolute() else PROJECT_ROOT / configured
+        break
+    return fallback
+
+
 JOBS_FILE = Path(
     os.environ.get(
         "OPTICARVIS_CLIP_JOBS_JSONL",
-        SELECTION_DIR / "candidate_windows.jsonl",
+        configured_project_path(
+            "clip_jobs_jsonl",
+            WORKFLOW_OUTPUTS / "clip_jobs.jsonl",
+        ),
     )
 ).resolve()
 MASTER_INDEX_FILE = Path(
     os.environ.get(
         "OPTICARVIS_MASTER_CLIP_INDEX_JSONL",
-        SELECTION_DIR / "master_clip_index.jsonl",
+        configured_project_path(
+            "master_clip_index_jsonl",
+            WORKFLOW_OUTPUTS / "master_clip_index.jsonl",
+        ),
     )
 ).resolve()
 FINAL_MANIFEST = WORKFLOW_OUTPUTS / "final_study_segments.json"
@@ -49,7 +79,10 @@ PROGRESS_FILE = SELECTION_DIR / "selection_progress.json"
 CANDIDATE_SUMMARY_FILE = Path(
     os.environ.get(
         "OPTICARVIS_CLIP_JOBS_SUMMARY_JSON",
-        SELECTION_DIR / "candidate_windows_summary.json",
+        configured_project_path(
+            "clip_jobs_summary_json",
+            WORKFLOW_OUTPUTS / "clip_jobs_summary.json",
+        ),
     )
 ).resolve()
 NEXT_VIDEO_STAGE_FILE = Path(

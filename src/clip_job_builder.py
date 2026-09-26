@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import warnings
 
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -15,8 +16,8 @@ if PROJECT_ROOT not in sys.path:
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-import common
-import candidate_index
+import common  # noqa: E402
+import candidate_index  # noqa: E402
 
 
 def normalise_path(path_value):
@@ -55,9 +56,13 @@ def config_value(key, default):
     if not environment_key.startswith("OPTICARVIS_"):
         environment_key = "OPTICARVIS_" + environment_key
 
-    environment_value = os.environ.get(environment_key)
-    if environment_value is not None and str(environment_value).strip() != "":
-        return environment_value
+    # Lower-case config keys (clip_jobs_jsonl) are exported upper-case
+    # (OPTICARVIS_CLIP_JOBS_JSONL, as the batch and selector read them); POSIX
+    # env names are case sensitive, so look up both spellings.
+    for name in dict.fromkeys([environment_key, environment_key.upper()]):
+        environment_value = os.environ.get(name)
+        if environment_value is not None and str(environment_value).strip() != "":
+            return environment_value
 
     if key in CONFIGS:
         value = CONFIGS[key]
@@ -305,7 +310,12 @@ def parse_literal(value):
         pass
 
     try:
-        return ast.literal_eval(text)
+        # Mapping lists are unquoted ("[3ai7SUaPoHM,...]"); literal_eval rejects
+        # them but first emits a SyntaxWarning per odd token. Silence that noise;
+        # the caller falls back to splitting the raw text.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            return ast.literal_eval(text)
     except Exception:
         pass
 

@@ -272,8 +272,11 @@ def run_all_pending_jobs():
 
     write_jsonl(PENDING_CLIP_JOBS_JSONL, pending_jobs)
 
+    # The batch reads OPTICARVIS_CLIP_JOBS_JSONL. Under the old name it ignored
+    # this list and applied the pending-list chunk indices to the full job
+    # list, re-running finished jobs and skipping pending ones.
     env_extra = {
-        "OPTICARVIS_CLIP_JOBS": PENDING_CLIP_JOBS_JSONL,
+        "OPTICARVIS_CLIP_JOBS_JSONL": PENDING_CLIP_JOBS_JSONL,
     }
 
     chunk_size = config_int("BATCH_CHUNK_SIZE", 5)

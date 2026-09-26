@@ -25,6 +25,7 @@ from pipeline_common import (
     LOCALITY,
     COUNTRY,
     CONTINENT,
+    config_setting_bool,
 )
 
 
@@ -152,19 +153,21 @@ def main():
         return
 
     # Reconstruct the ego's future path so the ribbon can bend into real turns
-    # (OPTICARVIS_VO_TRAJECTORY; the renderer picks the track up from
-    # ego_trajectory.py's default output path). Failure is expected on some
+    # (config USE_VO_TRAJECTORY, or env OPTICARVIS_VO_TRAJECTORY; resolved by
+    # the same config_setting_bool the renderer uses, so a track is built
+    # exactly when the renderer will consume it; the renderer picks the track
+    # up from ego_trajectory.py's default output path). Failure is expected on some
     # scenes -- VO cannot recover motion in dense stop-and-go traffic -- and the
     # documented fallback is a straight in-lane ribbon, so a failed track must
     # not fail the job.
-    if os.environ.get("OPTICARVIS_VO_TRAJECTORY", "0") == "1":
+    if config_setting_bool("USE_VO_TRAJECTORY", False):
         vo_script = os.path.join(SRC_DIR, "ego_trajectory.py")
         completed = subprocess.run([sys.executable, vo_script], cwd=SRC_DIR)
 
         if completed.returncode != 0:
             print("ego_trajectory failed (code %d); ribbon stays straight in the ego lane."
                   % completed.returncode)
-        elif os.environ.get("OPTICARVIS_FUTURE_ANCHOR", "1") == "1":
+        elif config_setting_bool("USE_FUTURE_ANCHOR", True):
             # Trace the driven path onto the actual street pixels of every
             # frame (homography chains to the future frames). Needs the VO
             # track's ego poses, hence inside this branch. A failure only
