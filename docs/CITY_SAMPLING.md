@@ -122,19 +122,28 @@ better trade for a study that also wants to say something about countries.
 
 ## Running it
 
-```bash
-.venv/bin/python scripts/city_sampler.py \
-    --frame path/to/cities.csv --n 150 --seed 20260818 --alpha 0.75 \
-    --population-column population_locality \
-    --footage-column footage_hours --min-footage-hours 1.0 \
-    --out workflow_outputs/city_sample
+```powershell
+uv run python .\scripts\city_sampler.py
 ```
 
-It prints the frame report, a replicated comparison against a spatially unaware
-design with the same probabilities, the population-coverage curve, and the
-weight diagnostics; it writes `sample_manifest.csv` with `pi` and
-`design_weight` per city. Keep that manifest: it is the statistical object,
-and `mapping.csv` cannot carry it.
+The design is set by constants at the top of the script rather than flags:
+`SAMPLE_SIZE` (150), `SEED` (20260818), `ALPHA` (0.75), `METHOD` (`lpm2`),
+`POPULATION_COLUMN`, and the eligibility filters (`MIN_FOOTAGE_HOURS`, vehicle
+type, time of day). The sampling frame is `docs/mapping_original.csv`.
+
+It prints the diagnostics and writes:
+
+| File | Contents |
+|---|---|
+| `lpm_city_sample/design_manifest.csv` | The drawn cities **with `pi` and `design_weight`** |
+| `lpm_city_sample/eligible_frame_with_pi.csv` | Every eligible city with its inclusion probability |
+| `lpm_city_sample/diagnostics.txt` | Spatial balance, nearest-city distances, weight diagnostics |
+| `lpm_city_sample/selected_cities_by_country.csv` | Cities drawn per country |
+| `mapping.csv` (current directory) | The clean sample the pipeline reads, without the design columns |
+
+Keep the design manifest: it is the statistical object, and `mapping.csv`
+cannot carry it. Because `mapping.csv` is written to the current directory,
+running the script from the repository root replaces the tracked one.
 
 Measured on a clustered 8,856-city frame (n = 150, 10 draws each): Voronoi
 balance 0.150 ± 0.004 for LPM against 0.444 ± 0.022 for randomised systematic
