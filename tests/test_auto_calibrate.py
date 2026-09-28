@@ -12,6 +12,7 @@ CPU only, no video files, no models. Standalone:
 or under pytest.
 """
 
+import json
 import os
 import sys
 
@@ -97,9 +98,15 @@ def test_all_three_consumers_read_the_same_file():
     with open(os.path.join(SRC, "batch", "batch_corrected_pipeline.py"), encoding="utf-8") as handle:
         batch = handle.read()
 
-    assert '"OPTICARVIS_AUTO_CALIBRATE", "1"' in batch, (
+    # The batch reads the switch from config (AUTO_CALIBRATE); both its code
+    # default and the shipped default.config must leave it on.
+    assert 'config_bool_value("AUTO_CALIBRATE", True)' in batch, (
         "auto-calibration must run by default in the batch"
     )
+    with open(os.path.join(root, "default.config"), encoding="utf-8-sig") as handle:
+        assert json.load(handle).get("AUTO_CALIBRATE", True) is True, (
+            "default.config must not switch auto-calibration off"
+        )
     assert "OPTICARVIS_CALIBRATION_DIR" in batch, (
         "the planner adapter subprocess must be told where the calibrations live"
     )

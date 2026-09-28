@@ -140,7 +140,9 @@ def test_builder_selector_and_analysis_share_one_candidate_file():
     They once defaulted to different files, so every fresh main.py run
     stopped at "Candidate file not found".
     """
-    builder = importlib.import_module("clip_job_builder")
+    # Reload: test_job_naming leaves clip_job_builder imported under a
+    # temporary environment, and a cached copy would compare its temp paths.
+    builder = importlib.reload(importlib.import_module("clip_job_builder"))
     assert Path(builder.JOBS_JSONL).resolve() == selector.JOBS_FILE
     assert Path(builder.SUMMARY_JSON).resolve() == selector.CANDIDATE_SUMMARY_FILE
     assert analysis.JOBS_FILE == selector.JOBS_FILE

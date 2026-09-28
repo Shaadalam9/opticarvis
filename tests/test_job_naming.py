@@ -501,6 +501,32 @@ def write_mapping(path, cities):
             )
 
 
+def isolated_builder_env(directory, cities, **overrides):
+    """Environment for a clip_job_builder that sees only this test's files.
+
+    The builder only makes jobs for mapped videos that exist on disk, so each
+    synthetic vid<N> gets a placeholder file. The real candidate index and
+    selection progress are pointed at empty paths, so the result does not
+    depend on what the developer's workflow_outputs/ happens to contain.
+    """
+    videos = os.path.join(directory, "videos")
+    os.makedirs(videos, exist_ok=True)
+
+    for index in range(cities):
+        with open(os.path.join(videos, "vid%d.mp4" % index), "wb") as handle:
+            handle.write(b"placeholder")
+
+    env = {
+        "OPTICARVIS_VIDEOS": videos,
+        "OPTICARVIS_USE_CANDIDATE_INDEX": "0",
+        "OPTICARVIS_SELECTION_PROGRESS_JSON": os.path.join(directory, "progress.json"),
+        "OPTICARVIS_CLIP_JOBS_JSONL": os.path.join(directory, "jobs.jsonl"),
+        "OPTICARVIS_CLIP_JOBS_SUMMARY_JSON": os.path.join(directory, "summary.json"),
+    }
+    env.update(overrides)
+    return env
+
+
 def build_jobs(clips_per_city, cities=3):
     directory = tempfile.mkdtemp()
     mapping = os.path.join(directory, "mapping.csv")
@@ -508,12 +534,12 @@ def build_jobs(clips_per_city, cities=3):
 
     builder = reload_with_env(
         "clip_job_builder",
-        {
-            "OPTICARVIS_CLIPS_PER_CITY": clips_per_city,
-            "OPTICARVIS_WINDOWS_PER_CITY": None,
-            "OPTICARVIS_CLIP_JOBS": os.path.join(directory, "jobs.jsonl"),
-            "OPTICARVIS_CLIP_JOBS_SUMMARY": os.path.join(directory, "summary.json"),
-        },
+        isolated_builder_env(
+            directory,
+            cities,
+            OPTICARVIS_CLIPS_PER_CITY=clips_per_city,
+            OPTICARVIS_WINDOWS_PER_CITY=None,
+        ),
     )
 
     jobs = []
@@ -541,12 +567,12 @@ def test_windows_per_city_emits_ordered_candidates():
 
     builder = reload_with_env(
         "clip_job_builder",
-        {
-            "OPTICARVIS_CLIPS_PER_CITY": "1",
-            "OPTICARVIS_WINDOWS_PER_CITY": "4",
-            "OPTICARVIS_CLIP_JOBS": os.path.join(directory, "jobs.jsonl"),
-            "OPTICARVIS_CLIP_JOBS_SUMMARY": os.path.join(directory, "summary.json"),
-        },
+        isolated_builder_env(
+            directory,
+            2,
+            OPTICARVIS_CLIPS_PER_CITY="1",
+            OPTICARVIS_WINDOWS_PER_CITY="4",
+        ),
     )
 
     with open(mapping, "r", encoding="utf-8-sig") as handle:
