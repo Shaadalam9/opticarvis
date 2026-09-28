@@ -142,26 +142,30 @@ clip (`clip_stem`), so clips cannot overwrite each other.
 ## How to render
 
 ```bash
-# gate timeline (slow, VLM per window)
-python src/gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
+# the whole study - what you normally run (resumes; see always_analyse)
+uv run python .\main.py
 
-# standard render (lane centering + curve fit, no VO)
-python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag>
+# one candidate job end to end: calibrate, planner, gate, effect plan, render
+# (<job_index> is the zero-based line of workflow_outputs/clip_jobs.jsonl)
+python src/batch/batch_corrected_pipeline.py 1 <job_index>
 
-# with turn following: build the VO track, then enable it
+# the VO track and future anchors for one clip, standalone (inspect / replay)
 python src/trajectory/ego_trajectory.py <clip.mp4> vo_traj.json
-OPTICARVIS_VO_TRAJECTORY=1 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
-
-# anchored on the road (what the batch does): add the homography-chain pass
 python src/trajectory/future_anchor.py <clip.mp4> vo_traj.json anchors.json
-OPTICARVIS_VO_TRAJECTORY=1 OPTICARVIS_FUTURE_ANCHOR_JSON=anchors.json \
-  python src/render_timeline_clip.py <clip.mp4> gate_timeline.json <tag> "" vo_traj.json
+
+# tune the camera constants on one still, no video or models
+python src/render/final_preview_renderer.py --calibrate frame.jpg calib.png
 ```
 
-`""` skips an optional argv slot. Supplying a track without its env flag warns
-and ignores it. Every render writes two MP4s (pedestrians / +vehicles) and
-records its effective config into the clip's workflow-state JSON. Env flags are
-read **at module import** — set them before Python starts.
+Turn following is on when `USE_VO_TRAJECTORY` is `true` in `config`
+(`OPTICARVIS_VO_TRAJECTORY=1` overrides it for one run). The pipeline then runs
+`ego_trajectory.py` and `future_anchor.py` before the renderer, which picks both
+up from `workflow_outputs/ego_trajectory/<tag>_*.json`; without it the ribbon
+stays straight in the ego lane. `OPTICARVIS_FUTURE_ANCHOR_JSON` points the
+renderer at an explicit anchors file instead. Every render writes two MP4s
+(pedestrians / +vehicles) plus the per-frame overlay geometry, and records its
+effective config into the clip's workflow-state JSON. Render settings are read
+**at module import** — set env overrides before Python starts.
 
 ## Invariants — do not break these
 

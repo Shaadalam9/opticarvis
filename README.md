@@ -107,17 +107,22 @@ monocular depth aligned to the road plane.
 
 ## How it works
 
+`main.py` picks up to ten ranked 30 second candidate windows per city and runs
+each one through the pipeline below, stopping at the first that yields a valid
+explanation render.
+
 ```mermaid
 flowchart TD
-    A[Dashcam clip] --> B[src/alpamayo_stream.py<br/>per-timestep planner output]
-    B --> C[src/gemma_gate_timeline.py<br/>VLM: explain, or stay clean?]
+    A[Candidate clip] --> K[src/perception/auto_calibrate.py<br/>per-clip vanishing point + horizon]
+    K --> B[Alpamayo planner<br/>external/oom-free-alpamayo]
+    B --> C[src/gate/gemma_gate_batch.py<br/>Gemma: explain, or stay clean?]
+    C -->|explain_now| M[src/gate/mirage_effect_planner.py<br/>which visual layers to draw]
     A --> D[src/trajectory/ego_trajectory.py<br/>future-frame visual odometry<br/>optional, for turns]
     D --> G[src/trajectory/future_anchor.py<br/>homography chain to future frames<br/>anchors the path on the road]
-    A --> E[final_preview_renderer.py]
-    C -->|gate timeline| E
+    M --> E[src/render/final_preview_renderer.py]
     D -->|future path| E
     G -->|street-pixel anchors| E
-    E --> F[Two MP4s +<br/>workflow state record]
+    E --> F[Two MP4s + overlay geometry +<br/>workflow state record]
 
     subgraph P [per frame, inside the renderer]
         direction LR
@@ -129,24 +134,32 @@ flowchart TD
     E -.-> P
 ```
 
-**Stages**
+**Stages** (driven per clip by `src/batch/batch_corrected_pipeline.py` and
+`src/batch/run_corrected_pipeline.py`)
 
-1. **Planner stream** (`alpamayo_stream.py`) — produces a per-timestep action and
-   reasoning trace from perception, standing in for a live planner.
-2. **Explanation gate** (`gemma_gate_timeline.py`) — runs a multimodal VLM over
-   sliding windows and decides, per window, whether an explanation is warranted.
-   Deliberately conservative: the default answer is *do not explain*.
-3. **Ego trajectory** (`ego_trajectory.py`, optional) — planar visual odometry that
+1. **Calibration** (`auto_calibrate.py`) — estimates the clip's vanishing point
+   and horizon before anything trusts the camera constants. An untrusted estimate
+   writes nothing and the defaults hold.
+2. **Planner** (Alpamayo, in `external/`) — produces the action, reasoning trace
+   and trajectory context for the clip.
+3. **Explanation gate** (`gemma_gate_batch.py`, running `workflow_runner.py` and
+   `gemma_reasoning_module.py`) — a multimodal VLM decides whether this clip is a
+   proper time to explain. Deliberately conservative: the default answer is *do not
+   explain*, and a "no" ends the job.
+4. **Effect plan** (`mirage_effect_planner.py`) — chooses the display target and
+   the visual layers to draw.
+5. **Ego trajectory** (`ego_trajectory.py`, optional) — planar visual odometry that
    reconstructs the vehicle's real path from the clip's future frames, so the ribbon
-   can follow a genuine turn.
-4. **Future anchors** (`future_anchor.py`, optional) — the clip is pre-recorded, so
-   the ground the car will occupy is *visible* in its later frames. This chains
-   ground-plane homographies between frames and maps the ego's near-future position
-   back into every earlier frame, yielding per-frame polylines of the street pixels
-   the car actually drives over. See [Anchoring the path](#anchoring-the-path-to-the-road).
-5. **Render** (`render_timeline_clip.py` → `final_preview_renderer.py`) — builds the
-   ribbon, highlights, occlusion and distance labels, animates the overlay on and
-   off per the gate timeline, transcodes to H.264, and records the run.
+   can follow a genuine turn. On when `USE_VO_TRAJECTORY` is true in `config`.
+6. **Future anchors** (`future_anchor.py`, optional, needs stage 5) — the clip is
+   pre-recorded, so the ground the car will occupy is *visible* in its later frames.
+   This chains ground-plane homographies between frames and maps the ego's
+   near-future position back into every earlier frame, yielding per-frame polylines
+   of the street pixels the car actually drives over. See
+   [Anchoring the path](#anchoring-the-path-to-the-road).
+7. **Render** (`final_preview_renderer.py`) — builds the ribbon, highlights,
+   occlusion and distance labels, writes the per-frame overlay geometry, transcodes
+   to H.264, and records the run.
 
 ## What shapes the ribbon (the contract)
 
@@ -232,10 +245,16 @@ The sampler itself lives in its own package,
 this study, then extracted so it is useful and citable on its own. It is a
 normal pinned dependency here.
 
-```bash
-.venv/bin/python scripts/city_sampler.py --frame cities.csv --n 150 --seed 20260818 \
-    --alpha 0.75 --footage-column footage_hours --min-footage-hours 1.0
+```powershell
+uv run python .\scripts\city_sampler.py
 ```
+
+The design settings (`SAMPLE_SIZE`, `SEED`, `ALPHA`, `METHOD`, the footage and
+eligibility filters) are constants at the top of the script, and the sampling
+frame is `docs/mapping_original.csv`. It writes the design manifest and
+diagnostics to `lpm_city_sample/` and the drawn sample as `mapping.csv` in the
+current directory, so run it from the repository root only when you mean to
+replace the tracked `mapping.csv`.
 
 Full rationale, references and the traps (eligibility must filter the frame
 *before* the draw; coordinates must be unit-sphere, never raw degrees) are in
@@ -393,7 +412,7 @@ opticarvis/
         oom-free-alpamayo/
         UFLDv2/
     alpamayo_outputs/     extracted clips + planner JSON <- created by the pipeline
-    workflow_outputs/     renders, timelines, state      <- created by the pipeline
+    workflow_outputs/     renders, gate decisions, state <- created by the pipeline
 ```
 
 `alpamayo_outputs/` and `workflow_outputs/` are created on demand — nothing to do.
@@ -484,30 +503,23 @@ study manifest), use `uv run python .\scripts\run_batch_jobs.py` (formerly `main
 
 The commands below are lower-level tools for diagnostics and individual renders.
 
-**Build the explanation-gate timeline**
+**Run one candidate job** — the full per-clip pipeline for one line of the
+candidate file (zero-based index into `workflow_outputs/clip_jobs.jsonl`):
 
 ```bash
-python src/gemma_gate_timeline.py <clip.mp4> gate_timeline.json 6.0
+python src/batch/batch_corrected_pipeline.py 1 <job_index>
 ```
 
-**Render** — the tag becomes part of the output filename:
+**Render with turn following** — set `USE_VO_TRAJECTORY` to `true` in `config`
+(or `OPTICARVIS_VO_TRAJECTORY=1` for one run). The pipeline then builds the
+visual-odometry track and the future anchors before rendering; without it the
+ribbon stays straight in the ego lane.
+
+**Inspect the visual odometry** for a clip on its own:
 
 ```bash
-python src/render_timeline_clip.py <clip.mp4> gate_timeline.json lanecenter
+python src/trajectory/ego_trajectory.py <clip.mp4> <out_trajectory.json>
 ```
-
-**Render with turn following** — reconstruct the path first, then enable it:
-
-```bash
-python src/trajectory/ego_trajectory.py <clip.mp4> vo_traj.json 4.0
-```
-
-```bash
-OPTICARVIS_VO_TRAJECTORY=1 python src/render_timeline_clip.py <clip.mp4> gate_timeline.json hybrid "" vo_traj.json
-```
-
-Pass `""` to skip an optional argument slot. Supplying a track file while its flag is
-unset is ignored **with a warning**, rather than silently.
 
 **Tune the camera calibration** on a single still, with no video or models loaded:
 
@@ -527,7 +539,7 @@ needs no code edits.
 |---|---|---|
 | `OPTICARVIS_PROJECT_ROOT` | the repo root (from `__file__`) | Base for every path below |
 | `OPTICARVIS_VIDEOS_DIR` | `<root>/videos` | Source dashcam videos |
-| `OPTICARVIS_WORKFLOW_OUTPUTS` | `<root>/workflow_outputs` | Renders, timelines, workflow state |
+| `OPTICARVIS_WORKFLOW_OUTPUTS` | `<root>/workflow_outputs` | Renders, gate decisions, workflow state |
 | `OPTICARVIS_ALPAMAYO_OUTPUTS` | `<root>/alpamayo_outputs` | Extracted clips and planner JSON |
 | `OPTICARVIS_EXTERNAL_DIR` | `<root>/external` | Parent of the upstream checkouts |
 | `OPTICARVIS_ALPAMAYO_REPO` | `<external>/alpamayo` | NVlabs Alpamayo checkout |
