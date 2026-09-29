@@ -66,6 +66,8 @@ from pipeline_common import (  # noqa: E402
     VIDEOS_DIR,
     alpamayo_extra_args,
     alpamayo_python,
+    alpamayo2_super_model,
+    alpamayo2_super_python,
     ensure_dir,
     append_jsonl,
     ffmpeg_path,
@@ -839,12 +841,20 @@ def run_alpamayo2_super_batch(ready_jobs, start_index=0):
             "ALPAMAYO2_SUPER_ADAPTER_SCRIPT does not exist: " + adapter_script
         )
 
-    model_id = config_text_value(
-        "ALPAMAYO2_SUPER_MODEL_ID",
-        "nvidia/Alpamayo2-Super",
-    )
+    model_id = alpamayo2_super_model()
+    alpamayo2_python = alpamayo2_super_python()
 
-    alpamayo2_python = config_text_value("ALPAMAYO2_SUPER_PYTHON", sys.executable)
+    # A missing planner venv used to surface as a FileNotFoundError traceback
+    # that killed the whole batch. Say what is wrong instead; the jobs are then
+    # reported as missing planner output like any other planner failure.
+    if not os.path.isfile(alpamayo2_python):
+        print("")
+        print("Alpamayo2 Super interpreter not found:", alpamayo2_python)
+        print("Set ALPAMAYO2_SUPER_PYTHON in config (or OPTICARVIS_ALPAMAYO_PYTHON) to the")
+        print("planner venv's python, and check the host with:")
+        print("    <planner python> scripts/alpamayo2_preflight.py")
+        return
+
     output_dir = alpamayo2_super_output_dir_from_jobs(ready_jobs)
     ready_jobs_jsonl = write_alpamayo2_super_ready_jobs(ready_jobs)
 

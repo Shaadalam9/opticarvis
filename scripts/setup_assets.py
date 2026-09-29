@@ -40,7 +40,7 @@ if SRC_DIR not in sys.path:
 
 import _paths  # noqa: E402,F401  (every src/<group>/ onto sys.path)
 
-from pipeline_common import CANDIDATE_SEMANTIC_MODEL  # noqa: E402
+from pipeline_common import CANDIDATE_SEMANTIC_MODEL, alpamayo2_super_model  # noqa: E402
 
 
 HF_MODELS = [
@@ -50,7 +50,7 @@ HF_MODELS = [
     (CANDIDATE_SEMANTIC_MODEL, "offline candidate discovery"),
 ]
 
-PLANNER_MODEL = "nvidia/Alpamayo2-Super"
+PLANNER_MODEL = alpamayo2_super_model()
 
 
 class Report(object):

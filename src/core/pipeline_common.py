@@ -393,6 +393,10 @@ def current_job_summary():
 # These are used by batch_corrected_pipeline.py.
 ALPAMAYO_MODEL = os.environ.get("OPTICARVIS_ALPAMAYO_MODEL", "").strip()
 
+# Default checkpoint for ALPAMAYO_BACKEND=alpamayo2_super. Config
+# ALPAMAYO2_SUPER_MODEL_ID and OPTICARVIS_ALPAMAYO_MODEL override it.
+ALPAMAYO2_SUPER_MODEL = "nvidia/Alpamayo2-Super"
+
 ALPAMAYO_CONFIG = os.environ.get(
     "OPTICARVIS_ALPAMAYO_CONFIG",
     "config_5080_16gb.json",
@@ -425,6 +429,46 @@ def alpamayo_python():
     return normalise_path(
         os.environ.get("OPTICARVIS_ALPAMAYO_PYTHON", sys.executable)
     )
+
+
+def alpamayo2_super_model():
+    """Checkpoint for the Super backend: env, then config, then the default.
+
+    OPTICARVIS_ALPAMAYO_MODEL is the documented planner override, so it wins
+    for this backend too instead of being silently ignored.
+    """
+    configured = str(root_config().get("ALPAMAYO2_SUPER_MODEL_ID") or "").strip()
+    return ALPAMAYO_MODEL or configured or ALPAMAYO2_SUPER_MODEL
+
+
+def alpamayo2_super_python():
+    """Interpreter for the Super planner: env, then config, then this one.
+
+    The planner has its own venv (it needs a newer torch and flash-attn), so
+    OPTICARVIS_ALPAMAYO_PYTHON or config ALPAMAYO2_SUPER_PYTHON names it. A
+    relative path is taken from the repository root, so it no longer depends
+    on the working directory; a bare name is looked up on PATH.
+    """
+    import shutil
+    import sys
+
+    raw = (
+        os.environ.get("OPTICARVIS_ALPAMAYO_PYTHON", "").strip()
+        or str(root_config().get("ALPAMAYO2_SUPER_PYTHON") or "").strip()
+    )
+
+    if not raw:
+        return sys.executable
+
+    # An absolute path is used verbatim: like OPTICARVIS_ALPAMAYO_PYTHON for
+    # R1 it may be a POSIX path while this runner is on Windows.
+    if os.path.isabs(raw) or raw.startswith("/"):
+        return raw
+
+    if "/" in raw or "\\" in raw:
+        return os.path.normpath(os.path.join(PROJECT_ROOT, raw))
+
+    return shutil.which(raw) or raw
 
 
 # Semantic segmentation runtime constants.
