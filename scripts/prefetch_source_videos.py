@@ -15,6 +15,7 @@ Run it from the repository root; it needs the `config`/`secret` files there.
 """
 
 import argparse
+import json
 import os
 import sys
 import threading
@@ -39,8 +40,6 @@ except SystemExit:
 
 
 def missing_video_ids(jobs_path):
-    import json
-
     seen = []
 
     with open(jobs_path, "r", encoding="utf-8") as handle:
@@ -79,6 +78,11 @@ def main():
         default=os.path.join(batch.WORKFLOW_OUTPUTS, "clip_jobs.jsonl"),
     )
     parser.add_argument("--workers", type=int, default=3)
+    parser.add_argument(
+        "--report",
+        default="",
+        help="write a JSON report of downloaded / not_found / network_error ids",
+    )
     args = parser.parse_args()
 
     if not os.path.isfile(args.jobs_jsonl):
@@ -99,7 +103,10 @@ def main():
 
     lock = threading.Lock()
     queue = list(missing)
-    results = {"ok": 0, "failed": []}
+    # Two different failures: the server has no such file (permanent), or the
+    # transfer broke - a read timeout or dropped connection (transient). Only
+    # the first may mark a video unavailable; the second is retried later.
+    results = {"ok": [], "not_found": [], "network_error": []}
 
     def worker():
         while True:
@@ -113,16 +120,14 @@ def main():
             # a dead worker would silently strand its share of the queue.
             try:
                 path = batch.download_source_video_from_ftp(video_id)
+                outcome = "ok" if path else "not_found"
             except Exception as error:
-                print("Download error for %s: %s %s"
+                print("\nDownload error for %s: %s %s"
                       % (video_id, type(error).__name__, str(error)[:200]))
-                path = None
+                outcome = "network_error"
 
             with lock:
-                if path:
-                    results["ok"] += 1
-                else:
-                    results["failed"].append(video_id)
+                results[outcome].append(video_id)
 
     threads = [
         threading.Thread(target=worker)
@@ -135,13 +140,26 @@ def main():
     for thread in threads:
         thread.join()
 
-    print("")
-    print("downloaded:", results["ok"], "| failed:", len(results["failed"]))
+    failed = results["not_found"] + results["network_error"]
 
-    for video_id in results["failed"]:
+    print("")
+    print(
+        "downloaded:", len(results["ok"]),
+        "| not found:", len(results["not_found"]),
+        "| network errors:", len(results["network_error"]),
+    )
+
+    for video_id in results["not_found"]:
         print("  not found on the file server:", video_id)
 
-    return 1 if results["failed"] and not results["ok"] else 0
+    for video_id in results["network_error"]:
+        print("  network error (will be retried):", video_id)
+
+    if args.report:
+        with open(args.report, "w", encoding="utf-8") as handle:
+            json.dump(results, handle, indent=2, sort_keys=True)
+
+    return 1 if failed and not results["ok"] else 0
 
 
 if __name__ == "__main__":

@@ -320,7 +320,7 @@ DELETE_FTP_VIDEOS_AFTER_USE = config_bool_value(
 
 FTP_ALIASES = config_list_value("FTP_ALIASES", ["tue1", "tue2", "tue3", "tue4", "tue5"])
 FTP_CRAWL_PAGE_LIMIT = config_int_value("FTP_CRAWL_PAGE_LIMIT", 500)
-FTP_TIMEOUT_SECONDS = config_int_value("FTP_TIMEOUT_SECONDS", 20)
+FTP_TIMEOUT_SECONDS = config_int_value("FTP_TIMEOUT_SECONDS", 120)
 WHEN_START_LOCAL_S = config_float_value("WHEN_START_LOCAL_S", 12.67)
 WHEN_END_LOCAL_S = config_float_value("WHEN_END_LOCAL_S", 15.60)
 
