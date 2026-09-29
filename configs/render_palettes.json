@@ -1,11 +1,12 @@
 {
   "0": {
     "name": "automotive_standard",
-    "target": "#FF9F1C",
-    "trajectory": "#00B4D8",
-    "label_text": "#F8F9FA",
-    "label_background": "#1F2937",
-    "highlight": "#FF9F1C"
+    "target": "#FFDC00",
+    "trajectory": "#5AC8F5",
+    "label_text": "#FFFFFF",
+    "label_background": "#000000",
+    "highlight": "#FFA000",
+    "trajectory_core": "#B4EBF5"
   },
   "1": {
     "name": "accessibility_okabe_ito",
