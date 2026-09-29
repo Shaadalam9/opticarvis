@@ -12,8 +12,8 @@ sys.path.insert(0, SERVICE_ROOT)
 
 os.environ["OPTICARVIS_PBO_ALLOW_INSECURE_LOCAL"] = "1"
 
-import main
-import space
+import main  # noqa: E402
+import space  # noqa: E402
 
 
 @dataclass
@@ -228,10 +228,107 @@ def test_participant_budget_is_frozen_at_registration():
         main.DEFAULT_BUDGET = original_default
 
 
+def _stub_optimizer(fit_calls=None):
+    def fit(training):
+        if fit_calls is not None:
+            fit_calls.append(len(training.comparisons))
+        return FakeModel()
+
+    main.optimizer_core.fit_preference_model = fit
+    main.optimizer_core.propose_eubo_pair = (
+        lambda model, observed_pair_keys, comparison_step, seed: _adaptive_pair(
+            comparison_step
+        )
+    )
+    main.optimizer_core.select_best_observed = (
+        lambda model, raw_configs, model_rows: (raw_configs[-1], 1.25)
+    )
+
+
+def test_inconsistent_data_is_a_permanent_422_not_a_retryable_500():
+    """The triggers retry 5xx; a result without its query must not loop."""
+    fake_db = FakeFirestore()
+    main._db = fake_db
+    main.DEFAULT_BUDGET = space.ComparisonBudget(10, 8)
+    _stub_optimizer()
+    client = main.app.test_client()
+    client.post("/registerUser", json={"userId": "participant-bad"})
+    fake_db.collection(main.RESULT_COLLECTION).document("orphan").create(
+        {
+            "pid": "participant-bad",
+            "comparisonStep": 7,
+            "preferredOption": "prefer_a",
+            "cityPhase": "familiar_optimisation",
+            "attentionCheckPassed": True,
+        }
+    )
+    response = client.post("/updatePreference", json={"userId": "participant-bad"})
+    assert response.status_code == 422, response.data
+    assert response.get_json()["retryable"] is False
+
+
+def test_repeated_completion_returns_the_frozen_selection_without_refitting():
+    fake_db = FakeFirestore()
+    main._db = fake_db
+    main.DEFAULT_BUDGET = space.ComparisonBudget(1, 1)
+    fit_calls = []
+    _stub_optimizer(fit_calls)
+    client = main.app.test_client()
+    client.post("/registerUser", json={"userId": "participant-done"})
+    for step in (1, 2):
+        fake_db.collection(main.RESULT_COLLECTION).document(f"done-{step}").create(
+            {
+                "pid": "participant-done",
+                "comparisonStep": step,
+                "preferredOption": "prefer_b",
+                "cityPhase": "familiar_optimisation",
+                "attentionCheckPassed": True,
+            }
+        )
+        client.post("/updatePreference", json={"userId": "participant-done"})
+
+    selection = dict(fake_db.collection(main.SELECTION_COLLECTION).documents["participant-done"])
+    fits_before = len(fit_calls)
+    # A trigger retry or the page's Retry button calls again after completion.
+    response = client.post("/updatePreference", json={"userId": "participant-done"})
+    assert response.status_code == 200
+    assert response.get_json()["skipped"] is True
+    assert response.get_json()["selectedConfig"] == selection["selectedConfig"]
+    assert len(fit_calls) == fits_before, "completion must not refit the model"
+    assert fake_db.collection(main.SELECTION_COLLECTION).documents["participant-done"] == selection
+
+
+def test_shared_secret_is_required_and_compared_exactly():
+    original_secret = os.environ.get("OPTICARVIS_PBO_SHARED_SECRET")
+    os.environ["OPTICARVIS_PBO_SHARED_SECRET"] = "correct-secret"
+    main._db = FakeFirestore()
+    _stub_optimizer()
+    try:
+        client = main.app.test_client()
+        for header in (None, "Bearer wrong-secret", "Bearer correct-secre", "correct-secret"):
+            headers = {"Authorization": header} if header else {}
+            response = client.post("/registerUser", json={"userId": "p"}, headers=headers)
+            assert response.status_code == 401, header
+        response = client.post(
+            "/registerUser",
+            json={"userId": "p"},
+            headers={"Authorization": "Bearer correct-secret"},
+        )
+        assert response.status_code == 200
+    finally:
+        if original_secret is None:
+            os.environ.pop("OPTICARVIS_PBO_SHARED_SECRET", None)
+        else:
+            os.environ["OPTICARVIS_PBO_SHARED_SECRET"] = original_secret
+
+
 def main_test_runner():
     tests = [
         test_complete_eighteen_comparison_lifecycle,
         test_participant_budget_is_frozen_at_registration,
+        test_inconsistent_data_is_a_permanent_422_not_a_retryable_500,
+        test_repeated_completion_returns_the_frozen_selection_without_refitting,
+        test_shared_secret_is_required_and_compared_exactly,
     ]
     for test in tests:
         test()

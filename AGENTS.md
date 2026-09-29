@@ -21,7 +21,7 @@ user-facing description; **this file is for you, the agent working on the code.*
 
 - **Windows**, Python 3.12, **`uv` for all package operations — never bare pip**:
   `uv pip install --python .venv/Scripts/python.exe <pkg>`.
-- GPU is an **RTX 5080 (Blackwell, sm_120)** → PyTorch must be a **CUDA 12.8**
+- GPU is an **RTX 5090, 32 GB (Blackwell, sm_120)** → PyTorch must be a **CUDA 12.8**
   build. There are **no prebuilt mmcv wheels for cu128** — anything requiring
   mmcv/mmdet (e.g. CLRerNet) is effectively unusable here without a source
   build; that is why UFLDv2 (pure PyTorch) was chosen for lanes. Do not
@@ -61,8 +61,14 @@ user-facing description; **this file is for you, the agent working on the code.*
   resolve cleanly while giving DGX Spark (sm_121) a CUDA 12.8 build.
 - `ffmpeg` must be on PATH for the H.264 delivery encode (the render degrades to
   the mp4v master with a warning if missing).
-- The Gemma gate model is `google/gemma-4-E2B-it` — **E2B, not E4B**: E4B does
-  not fit the 16 GB GPU.
+- The Gemma gate model is `google/gemma-4-E2B-it` — **E2B, not E4B**: E4B did
+  not fit the 16 GB RTX 5080 this was developed on. The host now has 32 GB, so
+  revisit it only with a measured memory check alongside the other models.
+- **Alpamayo2-Super does not run on this host.** It is Linux + CUDA only and its
+  BF16 weights are ~68 GB (this GPU has 32 GB). Keep `ALPAMAYO_BACKEND` at
+  `alpamayo_r1` here; run Super on a large-memory Linux host (e.g. DGX Spark)
+  after `scripts/alpamayo2_preflight.py` passes. Super refuses clips whose VO
+  ego history is stationary, so expect fewer usable clips per round than R1.
 - **Every model id lives in the `Models` block of `src/core/pipeline_common.py`** and
   is env-overridable. Do not hardcode a checkpoint in the module that loads it;
   add it there instead. The planner is a *subprocess*, so its interpreter

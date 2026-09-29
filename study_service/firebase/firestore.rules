@@ -15,6 +15,41 @@ service cloud.firestore {
         && documentId.matches(request.auth.uid + '_comparison_[0-9]+');
     }
 
+    // Prolific participant IDs are 24 hexadecimal characters.
+    function isProlificPid(value) {
+      return value is string && value.matches('^[0-9a-fA-F]{24}$');
+    }
+
+    function isShortString(value) {
+      return value is string && value.size() <= 64;
+    }
+
+    function isCount(value) {
+      return value is int && value >= 0 && value <= 100000;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    // One Firebase session per Prolific participant. The claim document is
+    // created in the same batch as the user document (each checks the other
+    // with getAfter), and a claim can never be updated, so a second browser
+    // or a private window cannot start a second session for the same PID.
+    match /prolificParticipants/{prolificPid} {
+      allow get: if signedIn() && resource.data.uid == request.auth.uid;
+      allow list: if false;
+      allow create: if signedIn()
+        && isProlificPid(prolificPid)
+        && request.resource.data.keys().hasOnly(['uid', 'studyId', 'sessionId', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && isShortString(request.resource.data.studyId)
+        && isShortString(request.resource.data.sessionId)
+        && request.resource.data.createdAt == request.time
+        && getAfter(userPath()).data.prolificPid == prolificPid;
+      allow update, delete: if false;
+    }
+
     match /users/{userId} {
       allow get: if ownsDocumentId(userId);
       allow list: if false;
@@ -22,11 +57,32 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'createdAt',
           'testMode',
-          'clientVersion'
+          'clientVersion',
+          'prolificPid',
+          'prolificStudyId',
+          'prolificSessionId',
+          'screenWidth',
+          'screenHeight',
+          'viewportWidth',
+          'viewportHeight',
+          'devicePixelRatio',
+          'pointerCoarse'
         ])
         && request.resource.data.createdAt == request.time
-        && request.resource.data.testMode == true
-        && request.resource.data.clientVersion == 'internal_web_v1';
+        && request.resource.data.testMode is bool
+        && request.resource.data.clientVersion == 'prolific_web_v2'
+        && isProlificPid(request.resource.data.prolificPid)
+        && isShortString(request.resource.data.prolificStudyId)
+        && isShortString(request.resource.data.prolificSessionId)
+        && isCount(request.resource.data.screenWidth)
+        && isCount(request.resource.data.screenHeight)
+        && isCount(request.resource.data.viewportWidth)
+        && isCount(request.resource.data.viewportHeight)
+        && request.resource.data.devicePixelRatio is number
+        && request.resource.data.pointerCoarse is bool
+        && getAfter(
+          /databases/$(database)/documents/prolificParticipants/$(request.resource.data.prolificPid)
+        ).data.uid == request.auth.uid;
       allow update, delete: if false;
     }
 
@@ -38,6 +94,10 @@ service cloud.firestore {
     match /preferenceResults/{resultId} {
       allow get: if isOwnComparisonId(resultId);
       allow list: if false;
+      // A result must answer a comparison the service actually wrote for
+      // this participant, under the same step number: the document ID, the
+      // step field and an existing query must all agree. Without this a
+      // client could answer comparisons it was never shown.
       allow create: if isOwnComparisonId(resultId)
         && request.resource.data.keys().hasOnly([
           'pid',
@@ -47,20 +107,30 @@ service cloud.firestore {
           'attentionCheckPassed',
           'submittedAt',
           'testMode',
-          'clientVersion'
+          'clientVersion',
+          'responseTimeMs',
+          'shownAtClientMs',
+          'hiddenDuringComparison',
+          'viewportWidth',
+          'viewportHeight'
         ])
         && request.resource.data.pid == request.auth.uid
         && request.resource.data.comparisonStep is int
-        && request.resource.data.comparisonStep >= 1
-        && request.resource.data.comparisonStep <= get(
-          /databases/$(database)/documents/users/$(request.auth.uid)
-        ).data.preferenceProtocol.comparisonBudget.total
+        && resultId == request.auth.uid + '_comparison_'
+          + string(request.resource.data.comparisonStep)
+        && exists(/databases/$(database)/documents/preferenceQueries/$(resultId))
         && request.resource.data.preferredOption in ['prefer_a', 'prefer_b']
         && request.resource.data.cityPhase == 'familiar_optimisation'
         && request.resource.data.attentionCheckPassed == true
         && request.resource.data.submittedAt == request.time
-        && request.resource.data.testMode == true
-        && request.resource.data.clientVersion == 'internal_web_v1';
+        && request.resource.data.testMode == get(userPath()).data.testMode
+        && request.resource.data.clientVersion == 'prolific_web_v2'
+        && request.resource.data.responseTimeMs is int
+        && request.resource.data.responseTimeMs >= 0
+        && request.resource.data.shownAtClientMs is int
+        && request.resource.data.hiddenDuringComparison is bool
+        && isCount(request.resource.data.viewportWidth)
+        && isCount(request.resource.data.viewportHeight);
       allow update, delete: if false;
     }
 

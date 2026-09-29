@@ -455,3 +455,12 @@ footer {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Technical values and restart controls are for testers (?debug=1) only. */
+.debug-only {
+  display: none !important;
+}
+
+body.debug .debug-only {
+  display: revert !important;
+}

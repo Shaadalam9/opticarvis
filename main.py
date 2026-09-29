@@ -53,6 +53,7 @@ NEXT_STAGE_FILE = SELECTION_DIR / "next_video_stage.jsonl"
 PROGRESS_FILE = SELECTION_DIR / "selection_progress.json"
 FINAL_MANIFEST = WORKFLOW_OUTPUTS / "final_study_segments.json"
 ANALYSIS_SUMMARY = SELECTION_DIR / "analysis_summary.json"
+DOWNLOAD_REPORT = SELECTION_DIR / "download_report.json"
 
 BUILD_INDEX_SCRIPT = SRC_DIR / "candidates" / "build_candidate_index.py"
 BUILD_JOBS_SCRIPT = SRC_DIR / "candidates" / "clip_job_builder.py"
@@ -282,7 +283,7 @@ def partition_stage_rows(
     return present, missing
 
 
-def record_unavailable_stage_rows(rows: list[dict[str, Any]]) -> None:
+def record_unavailable_stage_rows(rows: list[dict[str, Any]], reason: str) -> None:
     if not rows:
         return
     progress = read_json(PROGRESS_FILE, {"attempts": [], "city_status": {}})
@@ -314,6 +315,7 @@ def record_unavailable_stage_rows(rows: list[dict[str, Any]]) -> None:
                 "city": row.get("city", "Unknown"),
                 "country": row.get("country", "Unknown"),
                 "video_id": video_id,
+                "reason": reason,
                 "failed_at": utc_now(),
             }
         )
@@ -358,10 +360,19 @@ def run_selection_cycle() -> None:
     )
 
 
-def download_stage(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def download_stage(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Download the stage videos; return (present, not_found, network_failed).
+
+    The file server drops transfers under load (read timeouts, reset
+    connections). Those are retried here and in later rounds; only a video
+    the server reports as absent is returned as not_found.
+    """
     workers = environment_int("OPTICARVIS_ANALYSIS_DOWNLOAD_WORKERS", 3, 1)
-    attempts = environment_int("OPTICARVIS_ANALYSIS_DOWNLOAD_ATTEMPTS", 2, 1)
+    attempts = environment_int("OPTICARVIS_ANALYSIS_DOWNLOAD_ATTEMPTS", 3, 1)
     present, missing = partition_stage_rows(rows)
+    not_found_ids: set[str] = set()
 
     for attempt in range(1, attempts + 1):
         if not missing:
@@ -370,6 +381,8 @@ def download_stage(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
             "Download attempt %d/%d for %d missing stage video(s)."
             % (attempt, attempts, len(missing))
         )
+        if DOWNLOAD_REPORT.exists():
+            DOWNLOAD_REPORT.unlink()
         run_step(
             "Download missing mapped videos",
             [
@@ -379,12 +392,52 @@ def download_stage(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
                 str(NEXT_STAGE_FILE),
                 "--workers",
                 str(workers),
+                "--report",
+                str(DOWNLOAD_REPORT),
             ],
             accepted_codes=(0, 1),
         )
+        report = read_json(DOWNLOAD_REPORT, {})
+        not_found_ids.update(str(video_id) for video_id in report.get("not_found", []))
         present, missing = partition_stage_rows(rows)
 
-    return present, missing
+    not_found = [row for row in missing if str(row.get("video_id", "")).strip() in not_found_ids]
+    # Anything else still missing (a network error, or no report at all
+    # because the prefetch itself died) is treated as transient.
+    network_failed = [row for row in missing if row not in not_found]
+    return present, not_found, network_failed
+
+
+def record_network_failures(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Count a round of network failures per video; return the ones to give up on.
+
+    A video that times out in OPTICARVIS_ANALYSIS_MAX_NETWORK_FAILURE_ROUNDS
+    rounds (default 3) is then treated as unavailable, so a file that can never
+    be transferred cannot hold its city - or the loop - forever.
+    """
+    if not rows:
+        return []
+    limit = environment_int("OPTICARVIS_ANALYSIS_MAX_NETWORK_FAILURE_ROUNDS", 3, 1)
+    progress = read_json(PROGRESS_FILE, {"attempts": [], "city_status": {}})
+    if not isinstance(progress, dict):
+        progress = {"attempts": [], "city_status": {}}
+    counts = progress.setdefault("network_failure_rounds_by_video", {})
+    if not isinstance(counts, dict):
+        counts = {}
+        progress["network_failure_rounds_by_video"] = counts
+
+    give_up = []
+    for row in rows:
+        video_id = str(row.get("video_id", "")).strip()
+        if not video_id:
+            continue
+        counts[video_id] = int(counts.get(video_id, 0) or 0) + 1
+        if counts[video_id] >= limit:
+            give_up.append(row)
+
+    progress["updated_at"] = utc_now()
+    write_json_atomic(PROGRESS_FILE, progress)
+    return give_up
 
 
 def index_downloaded_stage() -> None:
@@ -474,14 +527,22 @@ def main() -> int:
         print("VIDEO ROUND %d: %d unresolved city(ies)" % (rounds, len(stage_rows)))
         print("#" * 80)
 
-        present, missing = download_stage(stage_rows)
-        if missing:
+        present, not_found, network_failed = download_stage(stage_rows)
+        if not_found:
             print(
-                "%d video(s) remained unavailable after all download attempts; "
-                "their cities will advance to the next mapped video."
-                % len(missing)
+                "%d video(s) are not on the file server; their cities advance "
+                "to the next mapped video." % len(not_found)
             )
-            record_unavailable_stage_rows(missing)
+            record_unavailable_stage_rows(not_found, "not_found_on_server")
+        give_up = record_network_failures(network_failed)
+        if network_failed:
+            print(
+                "%d video(s) failed on network errors and will be retried next "
+                "round (%d reached the retry limit and are skipped)."
+                % (len(network_failed), len(give_up))
+            )
+        if give_up:
+            record_unavailable_stage_rows(give_up, "network_error_retry_limit")
 
         if present:
             index_downloaded_stage()
@@ -489,7 +550,9 @@ def main() -> int:
         run_selection_cycle()
         after_rows = read_jsonl(NEXT_STAGE_FILE)
         after = stage_signature(after_rows)
-        if after and after == before:
+        # A round that only retried network failures legitimately stages the
+        # same videos again; record_network_failures bounds how often.
+        if after and after == before and not network_failed:
             raise SystemExit(
                 "The staged search made no progress. The current files were "
                 "preserved; inspect selection_progress.json and rerun."
