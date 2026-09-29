@@ -86,7 +86,7 @@
                 <path d="M310 350 C315 300 328 245 320 190 C316 158 315 136 318 112"></path>
               </svg>
             </div>
-            <details>
+            <details class="debug-only">
               <summary>Technical values</summary>
               <dl class="parameter-list"></dl>
             </details>
@@ -108,7 +108,7 @@
                 <path d="M310 350 C315 300 328 245 320 190 C316 158 315 136 318 112"></path>
               </svg>
             </div>
-            <details>
+            <details class="debug-only">
               <summary>Technical values</summary>
               <dl class="parameter-list"></dl>
             </details>
@@ -123,11 +123,10 @@
         <div class="complete-mark" aria-hidden="true">✓</div>
         <p class="section-label">Test complete</p>
         <h2 id="complete-title">All comparisons were processed</h2>
-        <p>
-          The backend has frozen the selected configuration for the distant city evaluation.
-        </p>
-        <div id="selected-config" class="selected-config"></div>
-        <button id="new-session-button" class="secondary-button" type="button">
+        <p id="complete-message"></p>
+        <a id="prolific-link" class="primary-button hidden" href="#">Return to Prolific</a>
+        <div id="selected-config" class="selected-config debug-only"></div>
+        <button id="new-session-button" class="secondary-button debug-only" type="button">
           Start another test session
         </button>
       </section>
@@ -138,7 +137,7 @@
         <p id="error-message"></p>
         <div class="button-row">
           <button id="retry-button" class="primary-button" type="button">Retry</button>
-          <button id="reset-button" class="secondary-button" type="button">
+          <button id="reset-button" class="secondary-button debug-only" type="button">
             New test session
           </button>
         </div>
@@ -153,7 +152,9 @@
     <script src="/__/firebase/11.10.0/firebase-app-compat.js"></script>
     <script src="/__/firebase/11.10.0/firebase-auth-compat.js"></script>
     <script src="/__/firebase/11.10.0/firebase-firestore-compat.js"></script>
+    <script src="/__/firebase/11.10.0/firebase-functions-compat.js"></script>
     <script src="/__/firebase/init.js"></script>
+    <script src="study-config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

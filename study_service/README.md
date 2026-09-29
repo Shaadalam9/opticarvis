@@ -64,13 +64,27 @@ The app writes `preferenceResults/{id}`:
 
 ```json
 {
-  "pid": "pseudonymous-participant-id",
+  "pid": "firebase-anonymous-uid",
   "comparisonStep": 1,
   "preferredOption": "prefer_a",
   "cityPhase": "familiar_optimisation",
-  "attentionCheckPassed": true
+  "attentionCheckPassed": true,
+  "testMode": false,
+  "clientVersion": "prolific_web_v2",
+  "responseTimeMs": 4210,
+  "shownAtClientMs": 1790632769527,
+  "hiddenDuringComparison": false,
+  "viewportWidth": 1536,
+  "viewportHeight": 776
 }
 ```
+
+The document ID must be `{uid}_comparison_{comparisonStep}` and that
+comparison must already exist in `preferenceQueries`; the rules refuse anything
+else, so a client cannot answer comparisons it was never shown.
+`responseTimeMs` runs from the moment the comparison is on screen, and
+`hiddenDuringComparison` records whether the tab was hidden meanwhile; use both
+to screen out participants who click through.
 
 The only accepted responses are `prefer_a` and `prefer_b`. The service joins
 the result to the configurations it originally wrote rather than trusting the
@@ -79,6 +93,42 @@ client to send parameter values back.
 At completion it writes `studySelections/{pid}` with `selectedConfig` and
 `frozenForDistantCity: true`. The selection contains the same protocol ID and
 budget for auditable analysis.
+
+## Prolific
+
+Study URL to enter in Prolific (Prolific fills in the three placeholders):
+
+```text
+https://<hosting-domain>/?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
+```
+
+* **Participant link.** The page refuses to start without a valid 24 character
+  `PROLIFIC_PID`. `users/{uid}` stores the PID, study and session IDs plus
+  screen size, viewport, device pixel ratio and coarse-pointer (touch) state.
+* **One session per participant.** Starting writes
+  `prolificParticipants/{PROLIFIC_PID}` and `users/{uid}` in one batch, and the
+  rules accept it only while that PID is unclaimed. The same participant in a
+  second browser or private window is told to continue where they started. A
+  returning participant in the same browser resumes where they stopped.
+* **Completion.** Set `prolificCompletionCode` in `firebase/public/study-config.js`
+  (Prolific: *Study completion* → *I'll redirect them using a URL*). After the
+  last comparison the page links to, and after `redirectDelaySeconds` redirects
+  to, `https://app.prolific.com/submissions/complete?cc=<code>`. While the code
+  is empty, participants are told to contact the researcher instead.
+* **Recovery.** Both Firestore triggers retry transient optimiser failures
+  (5xx, 429, network) for up to 30 minutes. Data errors return 422 and are not
+  retried. If a comparison still has not arrived after 45 s, the page calls the
+  `resumePreference` function once. Its Retry button calls it again; the call
+  is idempotent, so it cannot duplicate or skip a comparison.
+* **Testing.** Add `debug=1` and any 24 character hex PID, for example
+  `?PROLIFIC_PID=aaaaaaaaaaaaaaaaaaaaaaaa&debug=1`. Debug mode shows the
+  technical values and restart buttons, marks every record `testMode: true` and
+  never redirects. "Start another test session" moves to a fresh random PID,
+  because the old one stays claimed.
+
+Still to provide before launch: the participant-facing page text, consent and
+information sheet, the real stimulus, an attention check that follows
+Prolific's policy, and the completion code.
 
 ## Local validation
 
@@ -154,10 +204,20 @@ gcloud run deploy opticarvis-preference \
   --memory 2Gi \
   --cpu 2 \
   --timeout 300 \
+  --concurrency 8 \
+  --min-instances 1 \
+  --max-instances 10 \
   --allow-unauthenticated \
   --set-env-vars FIRESTORE_DATABASE='(default)',OPTICARVIS_PBO_EXPLORATION_COMPARISONS=10,OPTICARVIS_PBO_EUBO_COMPARISONS=8 \
   --set-secrets OPTICARVIS_PBO_SHARED_SECRET=OPTIMIZER_SHARED_SECRET:latest
 ```
+
+`--concurrency 8` matches the 8 gunicorn threads, so extra requests start a new
+instance instead of queueing inside a busy one. `--min-instances 1` keeps one
+instance warm: a cold start loads torch before the first comparison. One GP fit
+plus EUBO proposal measured about 1.8 s on 2 CPU threads (about 6.8 s for the
+first call after start-up). `--max-instances` caps the cost; raise it for large
+simultaneous Prolific batches.
 
 The Cloud Run ingress is public so the Firestore functions can reach it, but
 the application endpoints require the shared bearer secret. The service
@@ -177,9 +237,12 @@ Deploy the triggers:
 ```bash
 cd study_service/firebase
 npm install
-npx firebase-tools deploy --only functions,firestore:indexes \
+npx firebase-tools deploy --only functions,firestore:rules,firestore:indexes,hosting \
   --project <PROJECT_ID>
 ```
+
+The rules, the functions and the page change together (the rules accept only
+`clientVersion == "prolific_web_v2"`), so deploy all three in one command.
 
 Before deploying `firestore.indexes.json`, merge it with all existing project
 indexes. Firebase index deployment is declarative and can remove indexes that

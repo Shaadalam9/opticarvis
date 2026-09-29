@@ -11,6 +11,7 @@ never updates the preference model.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import threading
@@ -59,11 +60,24 @@ def _authorised() -> bool:
     if not expected:
         return os.environ.get("OPTICARVIS_PBO_ALLOW_INSECURE_LOCAL", "0") == "1"
     header = request.headers.get("Authorization", "")
-    return header == f"Bearer {expected}"
+    # Constant time: a plain == leaks how many leading characters matched.
+    return hmac.compare_digest(header.encode("utf-8"), f"Bearer {expected}".encode("utf-8"))
 
 
 def _unauthorised_response():
     return jsonify({"ok": False, "error": "unauthorised"}), 401
+
+
+# The Firestore triggers retry any failed call. A 5xx (crash, timeout, cold
+# start) is worth retrying; a data error is not - the same documents would fail
+# the same way for days. ValueError/TypeError are how preference_data and
+# space reject malformed or inconsistent participant data, so they map to 422,
+# which the triggers log and drop instead of retrying.
+@app.errorhandler(ValueError)
+@app.errorhandler(TypeError)
+def _permanent_data_error(error):
+    log.error("permanent data error: %s", error)
+    return jsonify({"ok": False, "error": str(error), "retryable": False}), 422
 
 
 def _documents(collection_name: str, user_id: str):
@@ -246,6 +260,18 @@ def update_preference():
         training = load_training_data(user_id)
         completed = len(training.comparisons)
         if completed >= budget.total_comparisons:
+            # A retried or repeated call must return the frozen selection, not
+            # refit the model and overwrite what the participant was shown.
+            existing = get_db().collection(SELECTION_COLLECTION).document(user_id).get()
+            if existing.exists:
+                return jsonify(
+                    {
+                        "ok": True,
+                        "studyCompleted": True,
+                        "skipped": True,
+                        "selectedConfig": existing.to_dict().get("selectedConfig"),
+                    }
+                )
             selection = finalize_participant(user_id, training, budget)
             return jsonify(
                 {
