@@ -179,6 +179,14 @@ TEXT_BACKGROUND = (0, 0, 0)
 ROAD_PATH_COLOUR = (245, 200, 90)
 ROAD_PATH_CORE_COLOUR = (245, 235, 180)
 
+# The study's trajectory_alpha scales the opacity of every ribbon layer (body,
+# rails, marks, contact shadow) by trajectory_alpha / REFERENCE_TRAJECTORY_ALPHA.
+# The reference is the study default, so the default config draws the ribbon
+# exactly as tuned; 0 hides it, and larger values approach opaque (each layer
+# is capped at 1).
+REFERENCE_TRAJECTORY_ALPHA = 0.55
+TRAJECTORY_OPACITY_SCALE = 1.0
+
 
 # ---------------------------------------------------------------------------
 # Ground-plane projection.
@@ -485,10 +493,17 @@ ANIM_MIN_ON_S = 2.0       # minimum time the overlay stays on once triggered
 ANIM_OFF_DELAY_S = 1.5    # bridge gaps shorter than this so it does not flicker
 ANIM_REVEAL_SOFT_PX = 26.0
 
-# Precomputed lookup table for the (static) background dim.
-DIM_LUT = np.clip(
-    np.arange(256, dtype=np.float32) * (1.0 - BACKGROUND_DIM_ALPHA), 0, 255
-).astype(np.uint8)
+
+def build_dim_lut(dim_alpha):
+    """Lookup table for the (static) background dim."""
+    return np.clip(
+        np.arange(256, dtype=np.float32) * (1.0 - dim_alpha), 0, 255
+    ).astype(np.uint8)
+
+
+# Rebuilt by apply_render_config_to_globals: a table frozen at import ignored
+# every configured background_dim_alpha.
+DIM_LUT = build_dim_lut(BACKGROUND_DIM_ALPHA)
 
 
 def load_render_config():
@@ -570,6 +585,7 @@ def expand_compact_bo_render_config(render_config):
             palette_id = int(palette_id)
 
         if isinstance(palette_id, int):
+            expanded["palette_index"] = palette_id
             expanded["palette_id"] = palette_map.get(palette_id, "automotive_standard")
 
     return expanded
@@ -674,9 +690,20 @@ def apply_render_config_to_globals(render_config):
                 globals()[name] = value
                 applied[name] = value
 
-    if "palette_id" in render_config:
-        globals()["OPTICARVIS_RENDER_PALETTE_ID"] = str(render_config["palette_id"])
-        applied["OPTICARVIS_RENDER_PALETTE_ID"] = str(render_config["palette_id"])
+    # The three settings below have no single renderer constant to map onto,
+    # so the float/int/bool tables above could not apply them; they were
+    # silently ignored until these explicit steps.
+    if "trajectory_ribbon_alpha" in render_config:
+        scale = float(render_config["trajectory_ribbon_alpha"]) / REFERENCE_TRAJECTORY_ALPHA
+        globals()["TRAJECTORY_OPACITY_SCALE"] = scale
+        applied["TRAJECTORY_OPACITY_SCALE"] = scale
+
+    if "background_dim_alpha" in render_config:
+        globals()["DIM_LUT"] = build_dim_lut(globals()["BACKGROUND_DIM_ALPHA"])
+        applied["DIM_LUT_ALPHA"] = globals()["BACKGROUND_DIM_ALPHA"]
+
+    if "palette_index" in render_config:
+        applied.update(apply_palette(render_config["palette_index"]))
 
     print()
     print("Render config")
@@ -686,6 +713,59 @@ def apply_render_config_to_globals(render_config):
     print("config_id:", render_config.get("render_config_id", ""))
     print("applied_constants:", applied)
 
+    return applied
+
+
+def hex_to_bgr(value):
+    text = str(value).strip().lstrip("#")
+    if len(text) != 6:
+        raise ValueError("expected a #RRGGBB colour, got %r" % (value,))
+    red, green, blue = (int(text[i:i + 2], 16) for i in (0, 2, 4))
+    return (blue, green, red)
+
+
+def lighter_bgr(colour, amount=0.55):
+    """The ribbon's centre marks: the path colour moved toward white."""
+    return tuple(int(round(c + (255 - c) * amount)) for c in colour)
+
+
+def apply_palette(palette_index):
+    """Set the overlay colours from configs/render_palettes.json.
+
+    target -> pedestrian highlight, highlight -> the same for close objects,
+    trajectory -> ribbon body and rails, trajectory_core -> ribbon marks
+    (derived from trajectory when absent), label_text / label_background ->
+    distance labels. Vehicles keep their own green in every palette so they
+    stay distinguishable from pedestrians; the palette is a study parameter
+    for the explanation target and path, not for the vehicle class colour.
+    """
+    path = resolve_project_path(
+        config_value("RENDER_PALETTES", os.path.join("configs", "render_palettes.json"))
+    )
+    try:
+        with open(path, "r", encoding="utf-8-sig") as handle:
+            palettes = json.load(handle)
+        palette = palettes[str(int(palette_index))]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("WARNING: palette %r unavailable (%s: %s); keeping the built-in colours."
+              % (palette_index, type(error).__name__, error))
+        return {}
+
+    trajectory = hex_to_bgr(palette["trajectory"])
+    colours = {
+        "BOX_COLOUR": hex_to_bgr(palette["target"]),
+        "BOX_COLOUR_CLOSE": hex_to_bgr(palette.get("highlight", palette["target"])),
+        "ROAD_PATH_COLOUR": trajectory,
+        "ROAD_PATH_CORE_COLOUR": (
+            hex_to_bgr(palette["trajectory_core"])
+            if palette.get("trajectory_core") else lighter_bgr(trajectory)
+        ),
+        "TEXT_COLOUR": hex_to_bgr(palette.get("label_text", "#FFFFFF")),
+        "TEXT_BACKGROUND": hex_to_bgr(palette.get("label_background", "#000000")),
+    }
+    globals().update(colours)
+    applied = {name: list(value) for name, value in colours.items()}
+    applied["PALETTE"] = "%s (%s)" % (palette_index, palette.get("name", ""))
     return applied
 
 
@@ -1681,6 +1761,11 @@ def draw_centerline_chevrons(layer, centre_arr, phase_m=0.0, colour=255,
                      colour, thickness, cv2.LINE_AA)
 
 
+def ribbon_alpha(base_alpha):
+    """A ribbon layer's opacity after the study's trajectory_alpha scale."""
+    return min(1.0, base_alpha * TRAJECTORY_OPACITY_SCALE)
+
+
 def build_path_overlay(geometry, height, width, chevron_phase_m=0.0):
     """Precompute the static ribbon as a premultiplied overlay.
 
@@ -1736,10 +1821,10 @@ def build_path_overlay(geometry, height, width, chevron_phase_m=0.0):
     # escaping the rails onto bare asphalt breaks the illusion instantly.
     dash_cov = cv2.bitwise_and(dash_cov, band_mask)
 
-    a_shadow = (shadow_cov.astype(np.float32) / 255.0) * profile_col * CONTACT_SHADOW_ALPHA
-    a_body = (body_cov.astype(np.float32) / 255.0) * profile_col * BODY_ALPHA
-    a_rails = (rails_cov.astype(np.float32) / 255.0) * profile_col * RAILS_ALPHA
-    a_dashes = (dash_cov.astype(np.float32) / 255.0) * profile_col * DASH_ALPHA
+    a_shadow = (shadow_cov.astype(np.float32) / 255.0) * profile_col * ribbon_alpha(CONTACT_SHADOW_ALPHA)
+    a_body = (body_cov.astype(np.float32) / 255.0) * profile_col * ribbon_alpha(BODY_ALPHA)
+    a_rails = (rails_cov.astype(np.float32) / 255.0) * profile_col * ribbon_alpha(RAILS_ALPHA)
+    a_dashes = (dash_cov.astype(np.float32) / 255.0) * profile_col * ribbon_alpha(DASH_ALPHA)
 
     def flat(colour):
         layer = np.empty((height, width, 3), dtype=np.float32)

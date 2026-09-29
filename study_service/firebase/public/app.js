@@ -12,7 +12,7 @@
   const views = ["loading", "start", "comparison", "complete", "error"];
 
   const palettes = {
-    0: { target: "#FF9F1C", trajectory: "#00B4D8" },
+    0: { target: "#FFDC00", trajectory: "#5AC8F5" },
     1: { target: "#56B4E9", trajectory: "#009E73" },
     2: { target: "#E0E0E0", trajectory: "#48CAE4" },
     3: { target: "#FF0055", trajectory: "#CCFF00" },
